@@ -113,13 +113,35 @@ def test_community_when_plugin_not_in_index(tmp_path: Path) -> None:
     assert trust == {"demo-plugin": Trust.official, "other-plugin": Trust.community}
 
 
-def test_verified_by_hash_allowlist(tmp_path: Path) -> None:
+def _yaml_digest(plugin_dir: Path) -> str:
+    return hashlib.sha256((plugin_dir / "plugin.yaml").read_bytes()).hexdigest()
+
+
+def test_verified_by_manifest_hash_allowlist(tmp_path: Path) -> None:
+    plugin_dir = make_plugin(tmp_path, body=b"print('allowed')\n")
+    entries = load_catalog(tmp_path, None, {_yaml_digest(plugin_dir)})
+    assert [e.trust for e in entries] == [Trust.verified]
+    assert [e.trust for e in load_catalog(tmp_path, None, {"0" * 64})] == [Trust.community]
+
+
+def test_entrypoint_hash_alone_is_not_verified(tmp_path: Path) -> None:
     body = b"print('allowed')\n"
     make_plugin(tmp_path, body=body)
     allowed = {hashlib.sha256(body).hexdigest()}
-    entries = load_catalog(tmp_path, None, allowed)
-    assert [e.trust for e in entries] == [Trust.verified]
-    assert [e.trust for e in load_catalog(tmp_path, None, {"0" * 64})] == [Trust.community]
+    assert [e.trust for e in load_catalog(tmp_path, None, allowed)] == [Trust.community]
+
+
+def test_verified_requires_integrity(tmp_path: Path) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    allowed = {_yaml_digest(plugin_dir)}
+    (plugin_dir / "run.py").write_bytes(b"print('tampered')\n")
+    assert [e.trust for e in load_catalog(tmp_path, None, allowed)] == [Trust.community]
+
+
+def test_entry_records_manifest_sha256(tmp_path: Path) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    [entry] = load_catalog(tmp_path, None)
+    assert entry.manifest_sha256 == _yaml_digest(plugin_dir)
 
 
 def test_bad_manifest_skipped(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

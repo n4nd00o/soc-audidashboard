@@ -1,3 +1,4 @@
+import hashlib
 import os
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from audidash_core.manifest import (
     PluginManifest,
     compute_hashes,
     load_manifest,
+    read_manifest,
     verify_integrity,
 )
 
@@ -47,6 +49,20 @@ def test_loads_valid_manifest(tmp_path: Path) -> None:
     assert manifest.entrypoint == "run.py"
     assert manifest.references == []
     assert manifest.parameters == {}
+
+
+# "1" followed by ARABIC-INDIC DIGIT ONE: \d would accept it, [0-9] must not.
+@pytest.mark.parametrize("version", ["1" + chr(0x661) + ".0.0", "1.0.1" + chr(0x661)])
+def test_rejects_non_ascii_digit_version(tmp_path: Path, version: str) -> None:
+    with pytest.raises(ManifestError, match="version"):
+        load_manifest(make_plugin(tmp_path, version=version))
+
+
+def test_read_manifest_returns_digest_of_parsed_bytes(tmp_path: Path) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    manifest, digest = read_manifest(plugin_dir)
+    assert manifest == load_manifest(plugin_dir)
+    assert digest == hashlib.sha256((plugin_dir / "plugin.yaml").read_bytes()).hexdigest()
 
 
 def test_rejects_trust_field(tmp_path: Path) -> None:

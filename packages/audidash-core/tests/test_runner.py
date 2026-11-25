@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -10,7 +11,7 @@ from typing import Any
 
 import pytest
 import yaml
-from audidash_core.manifest import Runtime, TargetType, compute_hashes
+from audidash_core.manifest import Runtime, TargetType, compute_hashes, load_manifest
 from audidash_core.runner import (
     MAX_STDOUT_BYTES,
     RunInput,
@@ -439,3 +440,191 @@ def test_plugin_can_import_listed_helper(tmp_path: Path) -> None:
     result = run_local(plugin, _input())
     assert result.status is RunStatus.ok, result
     assert result.warnings == ["from-helper"]
+
+
+# ---------------------------------------------------------------- reviewed-manifest pin
+
+
+def _yaml_sha256(plugin: Path) -> str:
+    return hashlib.sha256((plugin / "plugin.yaml").read_bytes()).hexdigest()
+
+
+def _swap_code(plugin: Path, marker: Path) -> None:
+    """Replace run.py with code that drops ``marker`` and re-hash plugin.yaml consistently."""
+    (plugin / "run.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\nprint('{{\"findings\": []}}')\n", encoding="utf-8"
+    )
+    _rewrite_files(plugin, compute_hashes(plugin, ["run.py"]))
+
+
+def test_pinned_manifest_sha256_mismatch_blocks(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    reviewed_sha = _yaml_sha256(plugin)
+    marker = tmp_path / "ran.marker"
+    _swap_code(plugin, marker)
+    result = run_local(plugin, _input(), expected_manifest_sha256=reviewed_sha)
+    assert result.status is RunStatus.blocked
+    assert result.reason is not None and result.reason.startswith("integrity")
+    assert result.manifest_sha256 is None
+    assert not marker.exists()
+
+
+def test_pinned_manifest_object_mismatch_blocks(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    reviewed = load_manifest(plugin)
+    marker = tmp_path / "ran.marker"
+    _swap_code(plugin, marker)
+    result = run_local(plugin, _input(), expected_manifest=reviewed)
+    assert result.status is RunStatus.blocked
+    assert result.reason is not None and result.reason.startswith("integrity")
+    assert not marker.exists()
+
+
+def test_pinned_manifest_blocks_unparseable_replacement(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    reviewed_sha = _yaml_sha256(plugin)
+    (plugin / "plugin.yaml").write_text("a: [unclosed", encoding="utf-8")
+    result = run_local(plugin, _input(), expected_manifest_sha256=reviewed_sha)
+    assert result.status is RunStatus.blocked
+    assert result.reason is not None and result.reason.startswith("integrity")
+
+
+def test_pinned_manifest_files_checked_against_pin(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    reviewed, reviewed_sha = load_manifest(plugin), _yaml_sha256(plugin)
+    (plugin / "run.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
+    result = run_local(
+        plugin, _input(), expected_manifest=reviewed, expected_manifest_sha256=reviewed_sha
+    )
+    assert result.status is RunStatus.blocked
+    assert result.reason is not None and result.reason.startswith("integrity")
+
+
+def test_pinned_manifest_match_runs_and_reports_digest(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit([finding()])\n")
+    reviewed, reviewed_sha = load_manifest(plugin), _yaml_sha256(plugin)
+    result = run_local(
+        plugin, _input(), expected_manifest=reviewed, expected_manifest_sha256=reviewed_sha
+    )
+    assert result.status is RunStatus.ok, result
+    assert result.manifest_sha256 == reviewed_sha
+    assert result.trust is None
+
+
+def test_manifest_sha256_reported_without_pin(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    assert run_local(plugin, _input()).manifest_sha256 == _yaml_sha256(plugin)
+
+
+def test_manifest_sha256_none_when_blocked_before_load(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    (plugin / "plugin.yaml").write_text("a: [unclosed", encoding="utf-8")
+    assert run_local(plugin, _input()).manifest_sha256 is None
+
+
+# ---------------------------------------------------------------- finding attribution / limits
+
+
+def test_finding_target_forced_to_run_target(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, 'emit([finding(target="someone-elses-asset")])\n')
+    result = run_local(plugin, _input(target="srv-42"))
+    assert result.status is RunStatus.ok, result
+    assert [f.target for f in result.findings] == ["srv-42"]
+
+
+def test_references_scrubbed_and_redacted(tmp_path: Path) -> None:
+    secret = "plain-cred-value-99"  # noqa: S105 - test fixture
+    body = """\
+    s = payload["credentials"]["k"]
+    emit([finding(references=["https://x.example/?token=abc", "see " + s, "https://ok.example"])])
+    """
+    plugin = make_plugin(tmp_path, body)
+    result = run_local(plugin, _input(credentials={"k": secret}))
+    assert result.status is RunStatus.ok, result
+    refs = result.findings[0].references
+    assert refs == [
+        "https://x.example/?token=[REDACTED:token]",
+        "see [REDACTED:credential]",
+        "https://ok.example",
+    ]
+
+
+def test_item_key_redaction_keeps_value_and_warns(tmp_path: Path) -> None:
+    body = """\
+    emit([
+        finding(id="KEY-1", item_key="user joao@empresa.com.br"),
+        finding(id="KEY-2", item_key="cred " + payload["credentials"]["k"]),
+        finding(id="KEY-3", item_key="/etc/ssh/sshd_config"),
+    ])
+    """
+    plugin = make_plugin(tmp_path, body)
+    result = run_local(plugin, _input(credentials={"k": "plain-cred-value-99"}))
+    assert result.status is RunStatus.ok, result
+    keys = {f.id: f.item_key for f in result.findings}
+    assert keys == {
+        "KEY-1": "user [REDACTED:email]",
+        "KEY-2": "cred [REDACTED:credential]",
+        "KEY-3": "/etc/ssh/sshd_config",
+    }
+    assert "item_key redacted for KEY-1" in result.warnings
+    assert "item_key redacted for KEY-2" in result.warnings
+    assert not any("KEY-3" in w for w in result.warnings)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        'item_key="k" * 256',
+        'references=["r" * 201]',
+        'references=["r"] * 51',
+    ],
+)
+def test_oversized_item_key_or_references_rejected(tmp_path: Path, kw: str) -> None:
+    plugin = make_plugin(tmp_path, f"emit([finding({kw})])\n")
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.error
+    assert result.reason == "invalid_output"
+
+
+# ---------------------------------------------------------------- stderr / interpreters
+
+
+def test_stderr_scrubbed_before_redaction(tmp_path: Path) -> None:
+    secret = "mysecretvalue joao@empresa.com.br"  # noqa: S105 - test fixture
+    body = """\
+    sys.stderr.write("err " + payload["credentials"]["k"] + " end\\n")
+    raise SystemExit(1)
+    """
+    plugin = make_plugin(tmp_path, body)
+    result = run_local(plugin, _input(credentials={"k": secret}))
+    assert result.status is RunStatus.error
+    assert "mysecretvalue" not in result.stderr_tail
+    assert "[REDACTED:credential]" in result.stderr_tail
+
+
+def test_missing_interpreter_reports_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin = tmp_path / "sh-plugin"
+    plugin.mkdir()
+    (plugin / "run.sh").write_text("echo '{\"findings\": []}'\n", encoding="utf-8")
+    data = {
+        "id": "sh-plugin",
+        "name": "Sh",
+        "version": "0.1.0",
+        "author": "tester",
+        "license": "Apache-2.0",
+        "description": "Bash plugin",
+        "runtime": "bash",
+        "execution": "local",
+        "entrypoint": "run.sh",
+        "files": compute_hashes(plugin, ["run.sh"]),
+        "targets": ["local"],
+        "connection": "local",
+        "permissions": ["read-only"],
+    }
+    (plugin / "plugin.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.error
+    assert result.reason == "interpreter_not_found:bash"

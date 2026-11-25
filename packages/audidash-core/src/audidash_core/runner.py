@@ -21,7 +21,7 @@ import threading
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import IO
+from typing import IO, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
@@ -33,7 +33,9 @@ from audidash_core.manifest import (
     PluginManifest,
     Runtime,
     TargetType,
-    load_manifest,
+    manifest_sha256,
+    parse_manifest,
+    read_manifest_bytes,
     verify_integrity,
 )
 from audidash_core.proc import ProcessGroup
@@ -81,6 +83,10 @@ class RunResult(BaseModel):
     started_at: datetime
     finished_at: datetime
     stderr_tail: str
+    # sha256 of the plugin.yaml bytes this run parsed; None when blocked before loading it.
+    manifest_sha256: str | None = None
+    # Trust tier, filled in by callers that know it (the runner does not consult the catalog).
+    trust: str | None = None
 
 
 # Runs the plugin with only the stdlib, the staged SDK copy and the staged plugin dir importable:
@@ -230,12 +236,23 @@ class _Scrubber:
             text = text.replace(value, _CREDENTIAL_MARK)
         return text
 
-    def finding(self, f: Finding) -> Finding:
+    def text(self, text: str) -> str:
+        """Scrub, pattern-redact, scrub again (redaction must not split a known value)."""
+        return self(redact(self(text)))
+
+    def finding(self, f: Finding, target: str) -> tuple[Finding, bool]:
+        """Sanitized copy attributed to ``target``; True when ``item_key`` was redacted."""
         # Scrub before sanitizing (so truncation cannot split a value) and after.
         fields = ("title", "evidence", "recommendation")
         f = f.model_copy(update={k: self(getattr(f, k)) for k in fields})
         f = sanitize_finding(f)
-        return f.model_copy(update={k: self(getattr(f, k)) for k in fields})
+        item_key = None if f.item_key is None else self.text(f.item_key)
+        update: dict[str, object] = {k: self(getattr(f, k)) for k in fields}
+        update["references"] = [self.text(r) for r in f.references]
+        update["item_key"] = item_key
+        # The plugin cannot attribute a finding to an asset other than the one it was run on.
+        update["target"] = target
+        return f.model_copy(update=update), item_key != f.item_key
 
 
 def _stderr_text(capture: _Capture, scrub: _Scrubber) -> str:
@@ -244,7 +261,7 @@ def _stderr_text(capture: _Capture, scrub: _Scrubber) -> str:
         # Drop the leading partial token so a cut secret cannot leak its suffix.
         cut = min((i for i in (text.find(c) for c in " \t\r\n") if i >= 0), default=-1)
         text = text[cut + 1 :] if cut >= 0 else ""
-    return scrub(redact(text))
+    return scrub.text(text)
 
 
 def _parse(raw: bytes) -> PluginOutput | None:
@@ -262,6 +279,7 @@ class _Run:
         self.plugin_id = plugin_dir.name
         self.plugin_version = ""
         self.target = run_input.target
+        self.manifest_sha256: str | None = None
 
     def result(
         self,
@@ -282,27 +300,66 @@ class _Run:
             started_at=self.started_at,
             finished_at=_now(),
             stderr_tail=stderr_tail,
+            manifest_sha256=self.manifest_sha256,
         )
 
 
 def run_local(
-    plugin_dir: Path, run_input: RunInput, timeout_s: int = DEFAULT_TIMEOUT_S
+    plugin_dir: Path,
+    run_input: RunInput,
+    timeout_s: int = DEFAULT_TIMEOUT_S,
+    *,
+    expected_manifest: PluginManifest | None = None,
+    expected_manifest_sha256: str | None = None,
 ) -> RunResult:
-    """Run a local plugin in isolation; plugin failures are reported via status."""
+    """Run a local plugin in isolation; plugin failures are reported via status.
+
+    ``expected_manifest`` / ``expected_manifest_sha256`` pin what the caller reviewed (the
+    manifest and the sha256 of its plugin.yaml bytes): if the on-disk plugin.yaml differs,
+    the run is blocked, and the staged files are checked against the pinned hashes. Without
+    a pin the plugin's own plugin.yaml is trusted for integrity checking.
+    """
     run = _Run(plugin_dir, run_input)
+    pin = _Pin(expected_manifest, expected_manifest_sha256)
     try:
-        return _run_local(run, plugin_dir, run_input, timeout_s)
+        return _run_local(run, plugin_dir, run_input, timeout_s, pin)
     except Exception as exc:  # safety net: never let a plugin failure escape
         # The ProcessGroup context in _run_local has already killed the tree.
         return run.result(RunStatus.error, f"internal_error:{type(exc).__name__}")
 
 
-def _run_local(run: _Run, plugin_dir: Path, run_input: RunInput, timeout_s: int) -> RunResult:
+class _Pin(NamedTuple):
+    manifest: PluginManifest | None
+    sha256: str | None
+
+
+def _load_pinned(run: _Run, plugin_dir: Path, pin: _Pin) -> PluginManifest | RunResult:
+    """The manifest to run with, or a blocked result when it is unreadable or not the pin."""
+    if pin.manifest is not None:
+        run.plugin_id, run.plugin_version = pin.manifest.id, pin.manifest.version
     try:
-        manifest = load_manifest(plugin_dir)
+        data = read_manifest_bytes(plugin_dir)
+        if pin.sha256 is not None and manifest_sha256(data) != pin.sha256:
+            return run.result(RunStatus.blocked, "integrity: plugin.yaml changed after review")
+        manifest = parse_manifest(plugin_dir, data)
     except ManifestError as exc:
+        if pin.manifest is not None or pin.sha256 is not None:
+            return run.result(RunStatus.blocked, f"integrity: {_short(str(exc))}")
         return run.result(RunStatus.blocked, f"manifest: {_short(str(exc))}")
+    if pin.manifest is not None and manifest != pin.manifest:
+        return run.result(RunStatus.blocked, "integrity: plugin.yaml differs from the review")
     run.plugin_id, run.plugin_version = manifest.id, manifest.version
+    run.manifest_sha256 = manifest_sha256(data)
+    return manifest
+
+
+def _run_local(
+    run: _Run, plugin_dir: Path, run_input: RunInput, timeout_s: int, pin: _Pin
+) -> RunResult:
+    loaded = _load_pinned(run, plugin_dir, pin)
+    if isinstance(loaded, RunResult):
+        return loaded
+    manifest = loaded
     if manifest.execution is not Execution.local:
         return run.result(RunStatus.blocked, "remote_not_supported")
     try:
@@ -328,6 +385,14 @@ def _run_local(run: _Run, plugin_dir: Path, run_input: RunInput, timeout_s: int)
         argv = interpreter_argv(
             manifest.runtime, code_dir / manifest.entrypoint, sdk_dir=sdk_dir, plugin_root=code_dir
         )
+        env = _clean_env(home)
+        if manifest.runtime is not Runtime.python:
+            # Resolve against the child's PATH ourselves: Windows CreateProcess would also
+            # search the system directories (e.g. pick up WSL's bash.exe).
+            resolved = shutil.which(argv[0], path=env["PATH"])
+            if resolved is None:
+                return run.result(RunStatus.error, f"interpreter_not_found:{argv[0]}")
+            argv[0] = resolved
         try:
             proc = group.spawn(
                 argv,
@@ -335,7 +400,7 @@ def _run_local(run: _Run, plugin_dir: Path, run_input: RunInput, timeout_s: int)
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=home,
-                env=_clean_env(home),
+                env=env,
             )
         except OSError as exc:
             return run.result(RunStatus.error, f"spawn_failed: {_short(str(exc))}")
@@ -371,8 +436,13 @@ def _run_local(run: _Run, plugin_dir: Path, run_input: RunInput, timeout_s: int)
         if output is None:
             return run.result(RunStatus.error, "invalid_output", stderr_tail=stderr_tail)
 
-    findings = [scrub.finding(f) for f in output.findings]
     warnings = [
         scrub(redact_capped(scrub(w), _MAX_WARNING_CHARS)) for w in output.warnings[:_MAX_WARNINGS]
     ]
+    findings: list[Finding] = []
+    for raw_finding in output.findings:
+        finding, key_redacted = scrub.finding(raw_finding, run_input.target)
+        findings.append(finding)
+        if key_redacted:
+            warnings.append(f"item_key redacted for {finding.id}")
     return run.result(RunStatus.ok, None, findings, warnings, stderr_tail)

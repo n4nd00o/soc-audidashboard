@@ -1,7 +1,6 @@
 """Ed25519-signed plugin catalog and trust-tier assignment."""
 
 import base64
-import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -19,7 +18,7 @@ from audidash_core.manifest import (
     IntegrityError,
     ManifestError,
     PluginManifest,
-    load_manifest,
+    read_manifest,
     verify_integrity,
 )
 
@@ -40,6 +39,8 @@ class CatalogEntry:
     manifest: PluginManifest
     path: Path
     trust: Trust
+    # sha256 of the exact plugin.yaml bytes ``manifest`` was parsed from (the review pin).
+    manifest_sha256: str
 
 
 def _b64_file(path: Path) -> bytes:
@@ -69,10 +70,6 @@ def _plugin_dirs(plugins_dir: Path) -> list[Path]:
     return sorted(p for p in children if p.is_dir() and (p / "plugin.yaml").is_file())
 
 
-def _manifest_digest(plugin_dir: Path) -> str:
-    return hashlib.sha256((plugin_dir / "plugin.yaml").read_bytes()).hexdigest()
-
-
 def build_index(plugins_dir: Path) -> bytes:
     """Canonical JSON of ``{id: {"version", "files", "manifest"}}`` for all valid plugins.
 
@@ -82,7 +79,7 @@ def build_index(plugins_dir: Path) -> bytes:
     index: dict[str, dict[str, object]] = {}
     for plugin_dir in _plugin_dirs(plugins_dir):
         try:
-            manifest = load_manifest(plugin_dir)
+            manifest, digest = read_manifest(plugin_dir)
         except ManifestError as exc:
             logger.warning("skipping %s: %s", plugin_dir.name, exc)
             continue
@@ -91,7 +88,7 @@ def build_index(plugins_dir: Path) -> bytes:
         index[manifest.id] = {
             "version": manifest.version,
             "files": manifest.files,
-            "manifest": _manifest_digest(plugin_dir),
+            "manifest": digest,
         }
     return json.dumps(index, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -134,8 +131,16 @@ def _load_signed_index(
     return parsed if isinstance(parsed, dict) else None
 
 
+def _intact(plugin_dir: Path, manifest: PluginManifest) -> bool:
+    try:
+        verify_integrity(plugin_dir, manifest)
+    except IntegrityError:
+        return False
+    return True
+
+
 def _is_official(
-    plugin_dir: Path, manifest: PluginManifest, index: dict[str, object] | None
+    plugin_dir: Path, manifest: PluginManifest, digest: str, index: dict[str, object] | None
 ) -> bool:
     if index is None:
         return False
@@ -144,21 +149,14 @@ def _is_official(
         return False
     if entry.get("version") != manifest.version or entry.get("files") != manifest.files:
         return False
-    try:
-        if entry.get("manifest") != _manifest_digest(plugin_dir):
-            return False
-        verify_integrity(plugin_dir, manifest)
-    except (IntegrityError, OSError):
-        return False
-    return True
+    return entry.get("manifest") == digest and _intact(plugin_dir, manifest)
 
 
-def _is_verified(plugin_dir: Path, manifest: PluginManifest, verified_hashes: set[str]) -> bool:
-    try:
-        digest = hashlib.sha256((plugin_dir / manifest.entrypoint).read_bytes()).hexdigest()
-    except OSError:
-        return False
-    return digest in verified_hashes
+def _is_verified(
+    plugin_dir: Path, manifest: PluginManifest, digest: str, verified_hashes: set[str]
+) -> bool:
+    """plugin.yaml's sha256 is allow-listed and every hashed file still matches it."""
+    return digest in verified_hashes and _intact(plugin_dir, manifest)
 
 
 def load_catalog(
@@ -174,15 +172,17 @@ def load_catalog(
     entries: list[CatalogEntry] = []
     for plugin_dir in _plugin_dirs(plugins_dir):
         try:
-            manifest = load_manifest(plugin_dir)
+            manifest, digest = read_manifest(plugin_dir)
         except ManifestError as exc:
             logger.warning("skipping plugin %s: %s", plugin_dir.name, exc)
             continue
-        if _is_official(plugin_dir, manifest, index):
+        if _is_official(plugin_dir, manifest, digest, index):
             trust = Trust.official
-        elif _is_verified(plugin_dir, manifest, set(verified_hashes)):
+        elif _is_verified(plugin_dir, manifest, digest, set(verified_hashes)):
             trust = Trust.verified
         else:
             trust = Trust.community
-        entries.append(CatalogEntry(manifest=manifest, path=plugin_dir, trust=trust))
+        entries.append(
+            CatalogEntry(manifest=manifest, path=plugin_dir, trust=trust, manifest_sha256=digest)
+        )
     return sorted(entries, key=lambda e: e.manifest.id)

@@ -1,12 +1,17 @@
 """CLI output hardening: plugin-controlled text must never reach the terminal raw."""
 
+import hashlib
+import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 from audidash_core import cli
 from audidash_core.catalog import CatalogEntry, Trust, load_catalog
 from audidash_core.cli_format import clean, clean_line
+from audidash_core.manifest import compute_hashes
 from test_cli import _run, _Tty, make_plugin
 
 EVIL = "x\x1b[31m\nFORGED\ty\x85z"
@@ -225,3 +230,66 @@ def test_trusted_run_also_shows_summary(
     assert "  - reads nothing" in out
     assert "trust:       verified" in out
     assert out.index("permissions:") < out.index("Status:")
+
+
+def _swap_to_marker_writer(plugin_dir: Path, marker: Path) -> None:
+    """Replace run.py with code that drops ``marker``; re-hash plugin.yaml to match."""
+    (plugin_dir / "run.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\nprint('{{\"findings\": []}}')\n", encoding="utf-8"
+    )
+    data = yaml.safe_load((plugin_dir / "plugin.yaml").read_text(encoding="utf-8"))
+    data["files"] = compute_hashes(plugin_dir, ["run.py"])
+    (plugin_dir / "plugin.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+def test_swap_after_confirmation_is_blocked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    marker = tmp_path / "ran.marker"
+    real_confirm = cli._confirm
+
+    def confirm_then_swap(*args: Any) -> bool:
+        approved = real_confirm(*args)
+        _swap_to_marker_writer(plugin_dir, marker)  # attacker wins the race after review
+        return approved
+
+    monkeypatch.setattr(cli, "_confirm", confirm_then_swap)
+    code, out, _ = _run([*RUN_ARGV, "--json", "--plugins-dir", str(tmp_path)], capsys)
+    assert code == 1
+    result = json.loads(out)
+    assert result["status"] == "blocked"
+    assert result["reason"].startswith("integrity")
+    assert not marker.exists()
+
+
+def test_source_changed_after_catalog_load_is_not_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    marker = tmp_path / "ran.marker"
+    real_find = cli._find
+
+    def find_then_tamper(*args: Any) -> CatalogEntry:
+        entry = real_find(*args)
+        (plugin_dir / "run.py").write_text(f"open({str(marker)!r}, 'w').close()\n")
+        return entry
+
+    monkeypatch.setattr(cli, "_find", find_then_tamper)
+    code, out, err = _run([*RUN_ARGV, "--plugins-dir", str(tmp_path)], capsys)
+    assert code == 1
+    assert "was not run" in err
+    assert "open(" not in out  # the unpinned bytes were never shown as the plugin's source
+    assert not marker.exists()
+
+
+def test_run_json_reports_trust_and_manifest_sha256(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    code, out, _ = _run([*RUN_ARGV, "--json", "--plugins-dir", str(tmp_path)], capsys)
+    assert code == 0
+    result = json.loads(out)
+    assert result["trust"] == "community"
+    digest = hashlib.sha256((plugin_dir / "plugin.yaml").read_bytes()).hexdigest()
+    assert result["manifest_sha256"] == digest

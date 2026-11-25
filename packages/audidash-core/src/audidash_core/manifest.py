@@ -10,7 +10,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 _SEMVER = (
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 _MAX_MANIFEST_BYTES = 256 * 1024
@@ -130,15 +130,40 @@ def _resolve_inside(plugin_dir: Path, relative: str) -> Path:
     return resolved
 
 
-def load_manifest(plugin_dir: Path) -> PluginManifest:
-    """Parse and validate ``plugin_dir/plugin.yaml``."""
+def read_manifest_bytes(plugin_dir: Path) -> bytes:
+    """Raw bytes of ``plugin_dir/plugin.yaml`` (size-capped)."""
     name = plugin_dir.name
     try:
         data = (plugin_dir / "plugin.yaml").read_bytes()
-        if len(data) > _MAX_MANIFEST_BYTES:
-            raise ManifestError(f"{name}: plugin.yaml exceeds {_MAX_MANIFEST_BYTES} bytes")
+    except OSError as exc:
+        raise ManifestError(f"{name}: cannot read plugin.yaml: {exc}") from exc
+    if len(data) > _MAX_MANIFEST_BYTES:
+        raise ManifestError(f"{name}: plugin.yaml exceeds {_MAX_MANIFEST_BYTES} bytes")
+    return data
+
+
+def manifest_sha256(data: bytes) -> str:
+    """sha256 (hex) of plugin.yaml bytes: the identity pinned by catalogs and runs."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def load_manifest(plugin_dir: Path) -> PluginManifest:
+    """Parse and validate ``plugin_dir/plugin.yaml``."""
+    return parse_manifest(plugin_dir, read_manifest_bytes(plugin_dir))
+
+
+def read_manifest(plugin_dir: Path) -> tuple[PluginManifest, str]:
+    """Manifest plus the sha256 of the exact plugin.yaml bytes it was parsed from."""
+    data = read_manifest_bytes(plugin_dir)
+    return parse_manifest(plugin_dir, data), manifest_sha256(data)
+
+
+def parse_manifest(plugin_dir: Path, data: bytes) -> PluginManifest:
+    """Validate plugin.yaml ``data`` belonging to ``plugin_dir``."""
+    name = plugin_dir.name
+    try:
         raw = yaml.safe_load(data.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
+    except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
         raise ManifestError(f"{name}: cannot read plugin.yaml: {exc}") from exc
     if not isinstance(raw, dict):
         raise ManifestError(f"{name}: plugin.yaml must be a mapping")
@@ -158,6 +183,14 @@ def _sha256(path: Path) -> str:
 def compute_hashes(plugin_dir: Path, files: list[str]) -> dict[str, str]:
     """sha256 (hex) of each relative file, read in binary."""
     return {relative: _sha256(_resolve_inside(plugin_dir, relative)) for relative in files}
+
+
+def matches_hashes(manifest: PluginManifest, files: dict[str, bytes]) -> bool:
+    """True when ``files`` holds exactly the hashed files, each with its recorded sha256."""
+    return files.keys() == manifest.files.keys() and all(
+        hashlib.sha256(files[relative]).hexdigest() == expected
+        for relative, expected in manifest.files.items()
+    )
 
 
 def verify_integrity(plugin_dir: Path, manifest: PluginManifest) -> None:

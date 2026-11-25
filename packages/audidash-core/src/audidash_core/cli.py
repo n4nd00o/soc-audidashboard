@@ -30,6 +30,7 @@ from audidash_core.manifest import (
     TargetType,
     compute_hashes,
     load_manifest,
+    matches_hashes,
     verify_integrity,
 )
 from audidash_core.runner import RunInput, RunResult, RunStatus, run_local
@@ -320,13 +321,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
         except OSError as exc:
             _err(f"error: cannot read source of {manifest.id}; plugin was not run: {exc}")
             return EXIT_FAILED
+        if not matches_hashes(manifest, files):
+            # Only bytes matching the pinned hashes may be shown as the plugin's source.
+            _err(f"error: {manifest.id} files do not match plugin.yaml; plugin was not run")
+            return EXIT_FAILED
     if not _confirm(entry, files, args.yes, info):
         _err("aborted: plugin was not run")
         return EXIT_USAGE
     run_input = RunInput(
         target=args.target, target_type=target_type, parameters=params, credentials={}
     )
-    result = run_local(entry.path, run_input)
+    # Pin what was reviewed: the runner blocks if plugin.yaml or any hashed file changed since.
+    result = run_local(
+        entry.path,
+        run_input,
+        expected_manifest=manifest,
+        expected_manifest_sha256=entry.manifest_sha256,
+    ).model_copy(update={"trust": entry.trust.value})
     if args.json:
         print(result.model_dump_json())
     else:
