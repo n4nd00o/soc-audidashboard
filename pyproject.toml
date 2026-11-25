@@ -15,6 +15,7 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 audidash-core = { workspace = true }
+audidash-sdk = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -46,5 +47,5 @@ select = ["E", "F", "I", "B", "UP", "S", "SIM"]
 strict = true
 python_version = "3.12"
 plugins = ["pydantic.mypy"]
-mypy_path = ["packages/audidash-core/src"]
+mypy_path = ["packages/audidash-core/src", "packages/audidash-sdk/src"]
 explicit_package_bases = true

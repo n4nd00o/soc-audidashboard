@@ -8,6 +8,7 @@ finding is sanitized before it leaves this module.
 """
 
 import contextlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -79,11 +80,26 @@ class RunResult(BaseModel):
     stderr_tail: str
 
 
+# Runs the plugin with only the stdlib and the SDK importable: ``-S`` drops site-packages
+# (so audidash_core and pydantic are unreachable) and the SDK's parent dir is the sole addition.
+_PY_BOOTSTRAP = (
+    "import sys, runpy; sdk, entry = sys.argv[1:3]; sys.argv = [entry]; "
+    "sys.path.insert(0, sdk); runpy.run_path(entry, run_name='__main__')"
+)
+
+
+def _sdk_parent_dir() -> str:
+    spec = importlib.util.find_spec("audidash_sdk")
+    if spec is None or spec.origin is None:
+        raise RuntimeError("audidash_sdk is not installed")
+    return str(Path(spec.origin).resolve().parent.parent)
+
+
 def interpreter_argv(runtime: Runtime, entrypoint: Path) -> list[str]:
     """Command line that runs ``entrypoint`` with the runtime's interpreter."""
     entry = str(entrypoint)
     if runtime is Runtime.python:
-        return [sys.executable, "-I", entry]
+        return [sys.executable, "-I", "-S", "-c", _PY_BOOTSTRAP, _sdk_parent_dir(), entry]
     if runtime is Runtime.powershell:
         return ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", entry]
     return ["bash", "--noprofile", "--norc", entry]

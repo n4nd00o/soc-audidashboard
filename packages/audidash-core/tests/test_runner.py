@@ -276,7 +276,11 @@ def test_runs_from_path_with_space(tmp_path: Path) -> None:
 
 def test_interpreter_argv() -> None:
     entry = Path("/plugins/x/run")
-    assert interpreter_argv(Runtime.python, entry) == [sys.executable, "-I", str(entry)]
+    argv = interpreter_argv(Runtime.python, entry)
+    assert argv[:3] == [sys.executable, "-I", "-S"]
+    assert argv[3] == "-c"
+    assert argv[-1] == str(entry)
+    assert (Path(argv[-2]) / "audidash_sdk" / "__init__.py").is_file()
     assert interpreter_argv(Runtime.powershell, entry) == [
         "pwsh",
         "-NoLogo",
@@ -381,3 +385,32 @@ def test_known_credentials_scrubbed(tmp_path: Path) -> None:
     assert marker in f.title and marker in f.evidence and marker in f.recommendation
     assert marker in result.warnings[0]
     assert marker in result.stderr_tail
+
+
+def test_sdk_available_to_python_plugins(tmp_path: Path) -> None:
+    body = """
+    from audidash_sdk import Reporter
+    r = Reporter(payload["target"])
+    r.add("SDK-1", "From SDK", "low", "misconfiguration")
+    r.emit()
+    """
+    plugin = make_plugin(tmp_path, body)
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.ok, result
+    assert [f.id for f in result.findings] == ["SDK-1"]
+
+
+def test_plugin_cannot_import_core(tmp_path: Path) -> None:
+    body = """
+    warnings = []
+    for mod in ("audidash_core", "pydantic"):
+        try:
+            __import__(mod)
+        except ImportError as exc:
+            warnings.append("ImportError " + mod)
+    emit(warnings=warnings)
+    """
+    plugin = make_plugin(tmp_path, body)
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.ok, result
+    assert result.warnings == ["ImportError audidash_core", "ImportError pydantic"]

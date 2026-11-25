@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "audidash-core",
+    "audidash-sdk",
     "soc-audidashboard",
 ]
 
@@ -90,6 +91,7 @@ name = "audidash-core"
 version = "0.1.0"
 source = { editable = "packages/audidash-core" }
 dependencies = [
+    { name = "audidash-sdk" },
     { name = "cryptography" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -97,10 +99,16 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "audidash-sdk", editable = "packages/audidash-sdk" },
     { name = "cryptography", specifier = ">=43" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pyyaml", specifier = ">=6" },
 ]
+
+[[package]]
+name = "audidash-sdk"
+version = "0.1.0"
+source = { editable = "packages/audidash-sdk" }
 
 [[package]]
 name = "bandit"

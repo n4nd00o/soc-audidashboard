@@ -8,7 +8,11 @@ dependencies = [
     "pydantic>=2.9",
     "pyyaml>=6",
     "cryptography>=43",
+    "audidash-sdk",
 ]
+
+[tool.uv.sources]
+audidash-sdk = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
