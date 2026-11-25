@@ -2,8 +2,13 @@
 
 import hashlib
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
+
+MAX_ITEM_KEY_CHARS = 255
+MAX_REFERENCE_CHARS = 200
+MAX_REFERENCES = 50
 
 
 class Severity(StrEnum):
@@ -40,8 +45,10 @@ class Finding(BaseModel):
     target: str = Field(min_length=1, max_length=255)
     evidence: str = ""
     recommendation: str = ""
-    references: list[str] = []
-    item_key: str | None = None
+    references: list[Annotated[str, Field(max_length=MAX_REFERENCE_CHARS)]] = Field(
+        default=[], max_length=MAX_REFERENCES
+    )
+    item_key: str | None = Field(default=None, max_length=MAX_ITEM_KEY_CHARS)
 
 
 class PluginOutput(BaseModel):
