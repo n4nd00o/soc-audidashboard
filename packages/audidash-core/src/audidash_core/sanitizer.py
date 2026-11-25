@@ -8,6 +8,11 @@ MAX_EVIDENCE_CHARS = 2000
 _TRUNCATED_SUFFIX = "…[truncated]"
 _MAX_TITLE_CHARS = 200
 _INPUT_MARGIN = 2
+# Between a secret's key and its value: optional closing quote (JSON), then = or :.
+# Values already redacted are left alone so earlier, more specific tokens survive.
+_SEPARATOR = r"""(["']?\s*[=:]\s*)(?!\[REDACTED:)"""
+# A quoted secret value is redacted whole; each rule appends its unquoted alternatives.
+_QUOTED = r"""(?:"[^"\r\n]{0,1024}"|'[^'\r\n]{0,1024}'"""
 
 # (pattern, replacement) applied in order; private keys first so their body
 # is not partially matched by later patterns.
@@ -25,9 +30,38 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"aws_secret_access_key\s*[=:]\s*\S+", re.IGNORECASE),
         "[REDACTED:aws_secret]",
     ),
+    # URI userinfo: scheme://user:password@host (user may be empty: redis://:pw@host).
     (
-        re.compile(r"\b(password|passwd|pwd)(\s*[=:]\s*)[^;\s]+", re.IGNORECASE),
+        re.compile(r"(?<=[A-Za-z0-9])(://[^:/@\s]{0,256}):[^@\s/]{1,1024}@"),
+        r"\1:[REDACTED:password]@",
+    ),
+    # Well-known token formats (GitHub, Slack, Stripe).
+    (
+        re.compile(
+            r"\b(?:gh[pousr]_[A-Za-z0-9]{8,255}|github_pat_[A-Za-z0-9_]{8,255}"
+            r"|xox[baprs]-[A-Za-z0-9-]{8,255}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,255})"
+        ),
+        "[REDACTED:token]",
+    ),
+    # Passwords: quoted values whole, ";"-terminated (connection strings) up to ";".
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9])(password|passwd|pwd)"
+            + _SEPARATOR
+            + _QUOTED
+            + r"""|[^;\r\n"']{1,256}(?=;)|[^;\s]+)""",
+            re.IGNORECASE,
+        ),
         r"\1\2[REDACTED:password]",
+    ),
+    # Generic key=value / key: value secrets (query strings, env files, JSON).
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9])(access[_-]?token|refresh[_-]?token|client[_-]?secret"
+            r"|api[_-]?key|token|secret)" + _SEPARATOR + _QUOTED + r"""|[^&;\s"']+)""",
+            re.IGNORECASE,
+        ),
+        r"\1\2[REDACTED:token]",
     ),
     (
         re.compile(r"\beyJ[A-Za-z0-9_-]{1,2000}\.[A-Za-z0-9_-]{1,2000}\.[A-Za-z0-9_-]{1,2000}"),

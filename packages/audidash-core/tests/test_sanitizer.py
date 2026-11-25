@@ -109,3 +109,65 @@ def test_secret_straddling_cap_does_not_leak() -> None:
     assert "AKIA" not in out
     cut = "x " * 1999 + "password=" + "hunter2" * 2000
     assert "hunter2" not in sanitize_finding(_finding(evidence=cut)).evidence
+
+
+GH_TOKEN = "ghp_" + "A1b2C3d4E5" * 3 + "F6g7H8"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "postgres://admin:S3cretPass@db:5432/app",
+            "postgres://admin:[REDACTED:password]@db:5432/app",
+        ),
+        ("redis://:hunter2pw@cache:6379/0", "redis://:[REDACTED:password]@cache:6379/0"),
+        (f"token={GH_TOKEN}", "token=[REDACTED:token]"),
+        ("api_key=sk_live_51Habcdefghijkl", "api_key=[REDACTED:token]"),
+        (
+            "https://x.example/cb?access_token=xyz&state=1",
+            "https://x.example/cb?access_token=[REDACTED:token]&state=1",
+        ),
+        ("?token=abc&state=keep;", "?token=[REDACTED:token]&state=keep;"),
+        ('password = "correct horse battery"', "password = [REDACTED:password]"),
+        ("Password=p@ss word;Server=x", "Password=[REDACTED:password];Server=x"),
+        ("client_secret: 'a b c' next", "client_secret: [REDACTED:token] next"),
+        ("refresh-token=abc123;", "refresh-token=[REDACTED:token];"),
+        ("X-Api-Key: k3y-value", "X-Api-Key: [REDACTED:token]"),
+        ('{"secret": "s3cr3t"}', '{"secret": [REDACTED:token]}'),
+        ("db_password=hunter2", "db_password=[REDACTED:password]"),
+        (f"leaked {GH_TOKEN} here", "leaked [REDACTED:token] here"),
+        ("gho_abcdefghij1234567890", "[REDACTED:token]"),
+        ("ghs_abcdefghij1234567890", "[REDACTED:token]"),
+        ("github_pat_11ABCDEFG0123456789_abcdefXYZ", "[REDACTED:token]"),
+        ("slack xoxb-1234567890-abcdefghij", "slack [REDACTED:token]"),
+        ("xoxp-1234567890-abcdefghij", "[REDACTED:token]"),
+        ("sk_" "test_4eC39HqLyjWDarjtT1zdp7dc", "[REDACTED:token]"),
+        ("rk_" "live_4eC39HqLyjWDarjtT1zdp7dc", "[REDACTED:token]"),
+    ],
+)
+def test_redacts_spec_secret_shapes(text: str, expected: str) -> None:
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://github.com/org/repo",
+        "http://example.com:8080/path@v2",
+        "the token expired yesterday",
+        "secret scanning is enabled",
+        "Server=x;Password=[REDACTED:password];",
+        "AccountKey=[REDACTED:azure_key];",
+    ],
+)
+def test_new_rules_have_no_false_positives(text: str) -> None:
+    assert redact(text) == text
+
+
+@pytest.mark.parametrize("unit", ["://", "a:", "token=", "password=", "ghp_", "x@", "=;"])
+def test_new_rules_are_fast_on_huge_input(unit: str) -> None:
+    text = unit * (1_000_000 // len(unit))
+    start = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - start < 1.0
