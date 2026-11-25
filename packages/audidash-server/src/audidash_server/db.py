@@ -1,4 +1,10 @@
-"""Engine/session wiring and programmatic Alembic migrations."""
+"""Engine/session wiring and programmatic Alembic migrations.
+
+Transaction contract: `get_session` yields a session that NEVER auto-commits. Dependency
+teardown may run after the response has been sent, so a commit there could fail after a 2xx.
+Handlers/services must call `db.commit()` explicitly before returning; anything uncommitted
+is rolled back when the request ends.
+"""
 
 from __future__ import annotations
 
@@ -43,15 +49,13 @@ def init_db(engine: Engine) -> None:
 
 
 def get_session(request: Request) -> Iterator[Session]:
-    """FastAPI dependency: commit on success, roll back on exception."""
+    """FastAPI dependency: never commits; rolls back anything left uncommitted."""
     factory: sessionmaker[Session] = request.app.state.sessionmaker
     with factory() as session:
         try:
             yield session
-            session.commit()
-        except BaseException:
+        finally:
             session.rollback()
-            raise
 
 
 def alembic_config(database_url: str) -> Config:

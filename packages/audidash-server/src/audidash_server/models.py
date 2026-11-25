@@ -7,11 +7,14 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+from audidash_core.catalog import Trust
 from audidash_core.findings import Category, FindingStatus, Severity
 from audidash_core.manifest import TargetType
+from audidash_core.runner import RunStatus
 from audidash_core.scoring import Criticality
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKey,
     Index,
@@ -112,7 +115,9 @@ class Device(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     name: Mapped[str] = mapped_column(String(128))
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
     cert_fingerprint: Mapped[str | None] = mapped_column(String(64), unique=True, default=None)
     cert_not_after: Mapped[datetime | None] = mapped_column(default=None)
     revoked_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -124,7 +129,9 @@ class EnrollmentToken(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     token_sha256: Mapped[str] = mapped_column(String(64), unique=True)
-    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     expires_at: Mapped[datetime]
     used_at: Mapped[datetime | None] = mapped_column(default=None)
     device_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -137,8 +144,12 @@ class ApiToken(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     token_sha256: Mapped[str] = mapped_column(String(64), unique=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), index=True
+    )
     expires_at: Mapped[datetime]
 
 
@@ -160,17 +171,17 @@ class Run(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)  # client-supplied run_id
     device_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("devices.id", ondelete="SET NULL"), default=None
+        ForeignKey("devices.id", ondelete="SET NULL"), index=True, default=None
     )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), default=None
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
     )
     asset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("assets.id", ondelete="RESTRICT"))
     plugin_id: Mapped[str] = mapped_column(String(128))
     plugin_version: Mapped[str] = mapped_column(String(64))
     manifest_sha256: Mapped[str] = mapped_column(String(64))
-    trust: Mapped[str] = mapped_column(String(32))
-    status: Mapped[str] = mapped_column(String(32))
+    trust: Mapped[Trust | None] = mapped_column(StrEnumType(Trust), default=None)
+    status: Mapped[RunStatus] = mapped_column(StrEnumType(RunStatus))
     reason: Mapped[str | None] = mapped_column(Text, default=None)
     started_at: Mapped[datetime]
     finished_at: Mapped[datetime]
@@ -202,7 +213,7 @@ class FindingRecord(Base):
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
     last_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("runs.id", ondelete="SET NULL"), default=None
+        ForeignKey("runs.id", ondelete="SET NULL"), index=True, default=None
     )
     status_changed_at: Mapped[datetime | None] = mapped_column(default=None)
     status_changed_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -246,7 +257,9 @@ class VerifiedPlugin(Base):
 class AuditEntry(Base):
     __tablename__ = "audit_log"
 
-    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seq: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     at: Mapped[datetime]
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
     actor_device_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
