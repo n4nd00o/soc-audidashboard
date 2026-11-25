@@ -28,3 +28,7 @@ coverage.xml
 *.swp
 .DS_Store
 Thumbs.db
+
+# Catalog signing keys (never commit)
+catalog.key
+*.private.pem
