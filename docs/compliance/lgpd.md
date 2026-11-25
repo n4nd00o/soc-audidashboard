@@ -20,8 +20,9 @@ tratamento de dados pessoais.
 ## Limitações
 
 - O sanitizador é baseado em padrões (regex): pode não detectar todo dado pessoal ou segredo.
-  Ele cobre `title`, `evidence`, `recommendation`, `warnings` e `stderr`, mas **não** `target`,
-  `references` nem `item_key` (veja [`SECURITY.md`](../../SECURITY.md)).
+  Ele cobre `title`, `evidence`, `recommendation`, `references`, `item_key`, `warnings` e
+  `stderr`; o `target` de cada achado é sempre substituído pelo alvo da execução (veja
+  [`SECURITY.md`](../../SECURITY.md)).
 - Os achados podem conter dados sensíveis da infraestrutura auditada; trate-os conforme a
   política de segurança da sua organização.
 - Veja também o [mapeamento ISO 27001/27002](iso27001-mapping.md).

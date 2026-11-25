@@ -35,9 +35,11 @@ This tool must only be used against systems you own or are explicitly authorized
   `network-port-scan` plugin can exceed the runner's 300 s timeout, so the run is killed
   instead of finishing with a budget warning. / Um `budget_s` acima de ~295 s pode estourar o
   tempo limite de 300 s do executor.
-- **Credential scrubbing coverage.** Redaction covers `title`, `evidence`, `recommendation`,
-  `warnings` and `stderr`, but **not** `target`, `references` or `item_key`; do not put
-  secrets in those fields. / A sanitização não cobre `target`, `references` nem `item_key`.
+- **Pattern-based redaction.** Redaction covers `title`, `evidence`, `recommendation`,
+  `references`, `item_key`, `warnings` and `stderr` (a finding's `target` is always replaced by
+  the run's target). It is regex-based: secret shapes it does not know (e.g. an arbitrary
+  password in free text without a `password=`-style key) can still pass. / A sanitização é
+  baseada em padrões e pode não detectar todo segredo.
 - **Official trust requires the maintainer's key.** The Ed25519 public key must be placed at
   `packages/audidash-core/src/audidash_core/keys/catalog.pub` by the maintainer. It is not
   present yet, so **all plugins are currently treated as `community`** (confirmation

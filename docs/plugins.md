@@ -108,10 +108,10 @@ Imprima exatamente um objeto JSON e mais nada no stdout:
 | `category` | `misconfiguration`, `vulnerability`, `suspicious`, `compliance` |
 | `target` | o alvo auditado (copie da entrada) |
 | `evidence`, `recommendation` | texto |
-| `references` | lista de strings |
-| `item_key` | opcional; diferencia vários achados com o mesmo `id` no mesmo alvo (ex.: um caminho de arquivo) |
+| `references` | lista de strings (máx. 50, cada uma com até 200 caracteres) |
+| `item_key` | opcional, máx. 255 caracteres; diferencia vários achados com o mesmo `id` no mesmo alvo (ex.: um caminho de arquivo) |
 
-Saída inválida faz a execução falhar. O runner sanitiza as evidências (strings parecidas com segredos são removidas) e limita o tamanho. Use o stderr para diagnóstico; saia com código diferente de zero em erros fatais.
+Saída inválida faz a execução falhar. O runner sanitiza as evidências (strings parecidas com segredos são removidas) e limita o tamanho; `references` e `item_key` também são mascarados (um `item_key` mascarado gera um aviso na execução), e o `target` de cada achado passa a ser o alvo da execução. Use o stderr para diagnóstico; saia com código diferente de zero em erros fatais.
 
 O runner executa o plugin com ambiente limpo, diretório de trabalho temporário, timeout e limite de tamanho do stdout.
 
@@ -185,8 +185,20 @@ A raiz de confiança (chave pública Ed25519 do catálogo) **nunca** é lida do 
 pois ele não é confiável: uma pasta clonada poderia trazer a própria chave e assinatura. A chave
 é um recurso do pacote, `packages/audidash-core/src/audidash_core/keys/catalog.pub`, adicionado
 pelo mantenedor na publicação. Sem ela, todo plugin é `community` e pede confirmação antes de
-executar. `--public-key CAMINHO` a substitui explicitamente (a CLI avisa que uma raiz de
-confiança personalizada está em uso).
+executar. `audidash plugins list --public-key CAMINHO` (a opção existe em `plugins list`,
+`plugins show` e `run`) a substitui explicitamente (a CLI avisa que uma raiz de confiança
+personalizada está em uso).
+
+- `official`: id, versão, `files` e o sha256 dos bytes do `plugin.yaml` constam do índice
+  assinado, e todo arquivo com hash continua íntegro.
+- `verified`: o sha256 dos bytes do `plugin.yaml` está na lista de permissões **e** todo arquivo
+  listado em `files` confere com o hash (o hash do manifesto fixa todo o código, não só o
+  entrypoint).
+- `community`: qualquer outro caso; a CLI mostra o código-fonte completo e pede confirmação.
+
+Antes de toda execução a CLI mostra o resumo do manifesto (permissões, conexão, parâmetros). O
+`plugin.yaml` revisado é fixado: se ele, ou qualquer arquivo com hash, mudar entre a revisão e a
+execução, a execução é bloqueada (`status: blocked`, motivo `integrity: ...`).
 
 ## Calculando os hashes
 

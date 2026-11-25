@@ -108,10 +108,10 @@ Print exactly one JSON object and nothing else on stdout:
 | `category` | `misconfiguration`, `vulnerability`, `suspicious`, `compliance` |
 | `target` | the audited target (copy it from the input) |
 | `evidence`, `recommendation` | text |
-| `references` | list of strings |
-| `item_key` | optional; distinguishes several findings with the same `id` on one target (e.g. a file path) |
+| `references` | list of strings (max 50, each max 200 chars) |
+| `item_key` | optional, max 255 chars; distinguishes several findings with the same `id` on one target (e.g. a file path) |
 
-Invalid output makes the run fail. Evidence is sanitized (secret-like strings redacted) and size-capped by the runner. Use stderr for diagnostics; exit with a non-zero code on fatal errors.
+Invalid output makes the run fail. Evidence is sanitized (secret-like strings redacted) and size-capped by the runner; `references` and `item_key` are redacted too (a redacted `item_key` adds a run warning), and each finding's `target` is set to the run's target. Use stderr for diagnostics; exit with a non-zero code on fatal errors.
 
 The runner runs plugins with a clean environment, a temporary working directory, a timeout and a stdout size limit.
 
@@ -185,8 +185,20 @@ The trust root (the catalog's Ed25519 public key) is **never** read from the plu
 because that directory is untrusted: a cloned folder could ship its own key and signature. The
 key is a package resource, `packages/audidash-core/src/audidash_core/keys/catalog.pub`, which the
 maintainer adds at release time. Without it every plugin is `community` and asks for
-confirmation before running. `audidash --public-key PATH` overrides it explicitly (the CLI prints
-a notice that a custom trust root is in use).
+confirmation before running. `audidash plugins list --public-key PATH` (the option exists on
+`plugins list`, `plugins show` and `run`) overrides it explicitly (the CLI prints a notice that a
+custom trust root is in use).
+
+- `official`: the plugin's id, version, `files` and the sha256 of its `plugin.yaml` bytes are in
+  the signed index, and every hashed file still matches.
+- `verified`: the sha256 of the `plugin.yaml` bytes is in the caller's allow-list **and** every
+  file listed in `files` still matches its hash (the manifest hash pins all code, not just the
+  entrypoint).
+- `community`: anything else; the CLI shows the full source and asks for confirmation.
+
+Before every run the CLI shows the manifest summary (permissions, connection, parameters). The
+reviewed `plugin.yaml` is pinned: if it, or any hashed file, changes between review and
+execution, the run is blocked (`status: blocked`, reason `integrity: ...`).
 
 ## Computing hashes
 
