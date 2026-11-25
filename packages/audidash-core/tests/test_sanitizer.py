@@ -142,8 +142,8 @@ GH_TOKEN = "ghp_" + "A1b2C3d4E5" * 3 + "F6g7H8"
         ("github_pat_11ABCDEFG0123456789_abcdefXYZ", "[REDACTED:token]"),
         ("slack xoxb-1234567890-abcdefghij", "slack [REDACTED:token]"),
         ("xoxp-1234567890-abcdefghij", "[REDACTED:token]"),
-        ("sk_" "test_4eC39HqLyjWDarjtT1zdp7dc", "[REDACTED:token]"),
-        ("rk_" "live_4eC39HqLyjWDarjtT1zdp7dc", "[REDACTED:token]"),
+        ("sk_" + "test_4eC39HqLyjWDarjtT1zdp7dc", "[REDACTED:token]"),
+        ("rk_" + "live_4eC39HqLyjWDarjtT1zdp7dc", "[REDACTED:token]"),
     ],
 )
 def test_redacts_spec_secret_shapes(text: str, expected: str) -> None:
