@@ -214,3 +214,15 @@ Baseado em CIS Benchmarks, CIS Controls v8 e ISO 27002:2022.
 - Estrutura interna de módulos, nomes de tabelas e migrações.
 - Layout visual detalhado das telas, dentro das diretrizes da seção 11.
 - Empacotamento do app desktop (PyInstaller ou Briefcase).
+
+## 14. Adendo do Plano 2 (2026-11-25)
+
+Decisões do usuário:
+- **Demonstração sem infraestrutura real:** `docker compose up` sobe servidor, PostgreSQL, proxy e **alvos de laboratório propositalmente inseguros** (web sem cabeçalhos de segurança, TLS vencido/autoassinado, serviço em porta de risco). `audidash demo` executa os plugins contra esses alvos e envia os achados — o dashboard fica populado com dados reais, não inventados.
+- **A CLI já envia achados via mTLS no Plano 2:** CA interna, cadastro de dispositivo (`audidash enroll`), login do usuário (`audidash login`, senha + TOTP) e envio (`audidash run --upload`). O Plano 3 (desktop) reutiliza esse mesmo fluxo.
+
+Chamadas do Claude (revisáveis):
+- **Terminação mTLS no proxy (Caddy):** porta 8443 para dashboard e cadastro (TLS de servidor) e porta 9443 para a API de ingestão (exige certificado de cliente da CA interna). O proxy repassa a impressão digital do certificado em um cabeçalho, junto com um segredo compartilhado; a aplicação só aceita esse cabeçalho com o segredo correto e escuta apenas na rede interna do compose.
+- **Banco:** SQLAlchemy 2 + Alembic. Testes unitários em SQLite; CI roda também a suíte contra PostgreSQL real (serviço do GitHub Actions).
+- **Credenciais da CLI:** a chave privada do dispositivo e o token de acesso ficam no diretório de configuração do usuário, com permissões restritas; o token expira em 15 minutos.
+- **Plano 2 abre com o reforço dos dados que saem do cliente:** pendências registradas no ledger do Plano 1.
