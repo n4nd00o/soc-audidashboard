@@ -11,6 +11,9 @@ dependencies = [
     "audidash-sdk",
 ]
 
+[project.scripts]
+audidash = "audidash_core.cli:main"
+
 [tool.uv.sources]
 audidash-sdk = { workspace = true }
 

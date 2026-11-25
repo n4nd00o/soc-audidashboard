@@ -45,10 +45,19 @@ Requer Python 3.12+ e [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone <url-do-repositorio>
-cd soc-audidashboard
+cd <diretorio-do-repositorio>
 uv sync
 uv run pytest -q
+
+# CLI
+uv run audidash plugins list
+uv run audidash plugins show http-security-headers
+uv run audidash run http-security-headers --target example.com --target-type web \
+    --param url=https://example.com --yes
 ```
+
+Credenciais **não** são aceitas pela linha de comando (vazariam no histórico do shell e no argv);
+a entrada de credenciais chega com o app desktop (keyring do SO).
 
 ## Como escrever um plugin
 

@@ -183,7 +183,7 @@ Os plugins aparecem com um nível: `official`, `verified` ou `community`. O nív
 
 ## Calculando os hashes
 
-Depois de qualquer edição, recalcule `files`. Com a CLI (chega em uma versão futura):
+Depois de qualquer edição, recalcule `files`. Com a CLI (`audidash plugins hash`, já disponível):
 
 ```
 audidash plugins hash <dir>

@@ -183,7 +183,7 @@ Plugins are shown with a tier: `official`, `verified` or `community`. The tier i
 
 ## Computing hashes
 
-After any edit, recompute `files`. With the CLI (arrives in a later release):
+After any edit, recompute `files`. With the CLI (`audidash plugins hash` is available):
 
 ```
 audidash plugins hash <dir>
