@@ -5,7 +5,7 @@ description = "Security-audit plugin platform with a findings dashboard (student
 readme = "README.en.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
-dependencies = ["audidash-core"]
+dependencies = ["audidash-core", "audidash-server"]
 
 [tool.uv]
 package = false
@@ -16,6 +16,7 @@ members = ["packages/*"]
 [tool.uv.sources]
 audidash-core = { workspace = true }
 audidash-sdk = { workspace = true }
+audidash-server = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -31,6 +32,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["packages", "plugins"]
 addopts = "-ra"
+filterwarnings = [
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated:DeprecationWarning",
+]
 markers = [
     "network_blackhole: needs 10.255.255.1 to silently drop packets (skip with AUDIDASH_SKIP_BLACKHOLE=1)",
 ]
@@ -58,5 +62,5 @@ select = ["E", "F", "I", "B", "UP", "S", "SIM"]
 strict = true
 python_version = "3.12"
 plugins = ["pydantic.mypy"]
-mypy_path = ["packages/audidash-core/src", "packages/audidash-sdk/src"]
+mypy_path = ["packages/audidash-core/src", "packages/audidash-sdk/src", "packages/audidash-server/src"]
 explicit_package_bases = true
