@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from audidash_core.findings import Category, Finding, Severity
 from audidash_core.sanitizer import MAX_EVIDENCE_CHARS, redact, sanitize_finding
@@ -85,3 +87,25 @@ def test_truncates_evidence() -> None:
     f = sanitize_finding(_finding(evidence="x" * 5000))
     assert len(f.evidence) <= MAX_EVIDENCE_CHARS + len(SUFFIX)
     assert f.evidence.endswith(SUFFIX)
+
+
+def test_unterminated_private_key_is_redacted_to_end() -> None:
+    out = redact("before" + chr(10) + "-----BEGIN RSA PRIVATE KEY-----" + chr(10) + "SECRETBODY")
+    assert out == "before" + chr(10) + "[REDACTED:private_key]"
+
+
+@pytest.mark.parametrize("unit", ["a", "1.", "a-", "a.", "eyJ", "a@b."])
+def test_redact_is_fast_on_huge_input(unit: str) -> None:
+    text = unit * (1_000_000 // len(unit))
+    start = time.perf_counter()
+    redact(text)
+    sanitize_finding(_finding(evidence=text, recommendation=text, title=text[:200]))
+    assert time.perf_counter() - start < 1.0
+
+
+def test_secret_straddling_cap_does_not_leak() -> None:
+    evidence = "x " * 2000 + "AKIAIOSFODNN7EXAMPLE" + " y" * 5000
+    out = sanitize_finding(_finding(evidence=evidence)).evidence
+    assert "AKIA" not in out
+    cut = "x " * 1999 + "password=" + "hunter2" * 2000
+    assert "hunter2" not in sanitize_finding(_finding(evidence=cut)).evidence

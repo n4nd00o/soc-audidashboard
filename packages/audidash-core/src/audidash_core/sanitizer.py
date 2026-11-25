@@ -7,13 +7,15 @@ from audidash_core.findings import Finding
 MAX_EVIDENCE_CHARS = 2000
 _TRUNCATED_SUFFIX = "…[truncated]"
 _MAX_TITLE_CHARS = 200
+_INPUT_MARGIN = 2
 
 # (pattern, replacement) applied in order; private keys first so their body
 # is not partially matched by later patterns.
 _RULES: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+            # Unterminated blocks (e.g. truncated output) are redacted to the end.
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
             re.DOTALL,
         ),
         "[REDACTED:private_key]",
@@ -28,7 +30,7 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
         r"\1\2[REDACTED:password]",
     ),
     (
-        re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+        re.compile(r"\beyJ[A-Za-z0-9_-]{1,2000}\.[A-Za-z0-9_-]{1,2000}\.[A-Za-z0-9_-]{1,2000}"),
         "[REDACTED:jwt]",
     ),
     (
@@ -37,15 +39,17 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     ),
     (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "[REDACTED:bearer]"),
     # CPF: punctuated, or a standalone 11-digit token (not inside longer digit runs).
-    (re.compile(r"(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)"), "[REDACTED:cpf]"),
-    (re.compile(r"\b\d{11}\b"), "[REDACTED:cpf]"),
+    (re.compile(r"(?<![0-9])[0-9]{3}\.[0-9]{3}\.[0-9]{3}-[0-9]{2}(?![0-9])"), "[REDACTED:cpf]"),
+    (re.compile(r"\b[0-9]{11}\b"), "[REDACTED:cpf]"),
     (
-        re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"),
+        re.compile(
+            r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}"
+        ),
         "[REDACTED:email]",
     ),
     # Brazilian phones: "(11) 98765-4321" or "+55 11 987654321".
-    (re.compile(r"\(\d{2}\)\s?9?\d{4}-?\d{4}(?!\d)"), "[REDACTED:phone]"),
-    (re.compile(r"\+55\s?\d{2}\s?9?\d{4}-?\d{4}(?!\d)"), "[REDACTED:phone]"),
+    (re.compile(r"\([0-9]{2}\)\s?9?[0-9]{4}-?[0-9]{4}(?![0-9])"), "[REDACTED:phone]"),
+    (re.compile(r"\+55\s?[0-9]{2}\s?9?[0-9]{4}-?[0-9]{4}(?![0-9])"), "[REDACTED:phone]"),
 ]
 
 
@@ -56,15 +60,34 @@ def redact(text: str) -> str:
     return text
 
 
+def _bounded(text: str, limit: int) -> str:
+    """Cap ``text`` before redaction so regex work stays bounded.
+
+    When cut, the trailing partial token is dropped so a secret straddling the
+    cut cannot leak a prefix. Unterminated private-key blocks are handled by
+    the redaction rule itself (redacted to end of string).
+    """
+    cap = limit * _INPUT_MARGIN
+    if len(text) <= cap:
+        return text
+    text = text[:cap]
+    cut = max(text.rfind(c) for c in (" ", chr(9), chr(10), chr(13)))
+    return text[:cut] if cut > 0 else text
+
+
+def _redact_capped(text: str, limit: int) -> str:
+    redacted = redact(_bounded(text, limit))
+    if len(redacted) > limit or len(text) > limit * _INPUT_MARGIN:
+        redacted = redacted[:limit] + _TRUNCATED_SUFFIX
+    return redacted
+
+
 def sanitize_finding(f: Finding) -> Finding:
     """Return a copy of ``f`` with text fields redacted; ``target`` is left intact."""
-    evidence = redact(f.evidence)
-    if len(evidence) > MAX_EVIDENCE_CHARS:
-        evidence = evidence[:MAX_EVIDENCE_CHARS] + _TRUNCATED_SUFFIX
     return f.model_copy(
         update={
-            "title": redact(f.title)[:_MAX_TITLE_CHARS],
-            "evidence": evidence,
-            "recommendation": redact(f.recommendation),
+            "title": redact(_bounded(f.title, _MAX_TITLE_CHARS))[:_MAX_TITLE_CHARS],
+            "evidence": _redact_capped(f.evidence, MAX_EVIDENCE_CHARS),
+            "recommendation": _redact_capped(f.recommendation, MAX_EVIDENCE_CHARS),
         }
     )
