@@ -181,6 +181,13 @@ Cuidado ao inserir dados da entrada no JSON manualmente; prefira uma ferramenta 
 
 Os plugins aparecem com um nível: `official`, `verified` ou `community`. O nível é **atribuído pelo catálogo**, nunca pelo manifesto: uma chave `trust` no `plugin.yaml` é rejeitada. O autor não consegue promover o próprio plugin.
 
+A raiz de confiança (chave pública Ed25519 do catálogo) **nunca** é lida do diretório de plugins,
+pois ele não é confiável: uma pasta clonada poderia trazer a própria chave e assinatura. A chave
+é um recurso do pacote, `packages/audidash-core/src/audidash_core/keys/catalog.pub`, adicionado
+pelo mantenedor na publicação. Sem ela, todo plugin é `community` e pede confirmação antes de
+executar. `--public-key CAMINHO` a substitui explicitamente (a CLI avisa que uma raiz de
+confiança personalizada está em uso).
+
 ## Calculando os hashes
 
 Depois de qualquer edição, recalcule `files`. Com a CLI (`audidash plugins hash`, já disponível):
@@ -189,7 +196,7 @@ Depois de qualquer edição, recalcule `files`. Com a CLI (`audidash plugins has
 audidash plugins hash <dir>
 ```
 
-Até lá, use a alternativa em Python:
+Alternativamente, use Python:
 
 ```python
 from pathlib import Path

@@ -97,17 +97,29 @@ def test_list_shows_official_with_valid_key(
     (tmp_path / "index.sig").write_bytes(base64.b64encode(sign_index(index, key)))
     raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     (tmp_path / "catalog.pub").write_bytes(base64.b64encode(raw))
-    code, out, _ = _run(["plugins", "list", "--plugins-dir", str(tmp_path)], capsys)
+    pub = tmp_path / "catalog.pub"
+    argv = ["plugins", "list", "--plugins-dir", str(tmp_path)]
+    # shipped inside the (untrusted) plugins dir: must be ignored
+    code, out, _ = _run(argv, capsys)
+    assert code == 0
+    assert "official" not in out
+    assert "community" in out
+    # explicit override: honoured, with a notice
+    code, out, err = _run([*argv, "--public-key", str(pub)], capsys)
     assert code == 0
     assert "official" in out
+    assert "custom trust root" in err
 
 
 def test_list_malformed_public_key_warns_not_crashes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     make_plugin(tmp_path)
-    (tmp_path / "catalog.pub").write_text("not a key!!", encoding="utf-8")
-    code, out, err = _run(["plugins", "list", "--plugins-dir", str(tmp_path)], capsys)
+    bad = tmp_path / "bad.pub"
+    bad.write_text("not a key!!", encoding="utf-8")
+    code, out, err = _run(
+        ["plugins", "list", "--plugins-dir", str(tmp_path), "--public-key", str(bad)], capsys
+    )
     assert code == 0
     assert "community" in out
     assert "public key" in err.lower()
@@ -205,7 +217,9 @@ def test_run_community_requires_confirmation(
 def test_run_non_interactive_without_yes_declines(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    make_plugin(tmp_path)
+    marker = tmp_path / "ran.marker"
+    body = f'open({str(marker)!r}, "w").close()\nprint(json.dumps({{"findings": []}}))\n'
+    make_plugin(tmp_path / "plugins", body)
     monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))
     code, _, _ = _run(
         [
@@ -216,11 +230,12 @@ def test_run_non_interactive_without_yes_declines(
             "--target-type",
             "local",
             "--plugins-dir",
-            str(tmp_path),
+            str(tmp_path / "plugins"),
         ],
         capsys,
     )
     assert code == 2
+    assert not marker.exists()
 
 
 def test_run_community_accepts_interactive_y(

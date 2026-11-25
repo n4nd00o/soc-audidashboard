@@ -181,6 +181,13 @@ Be careful when interpolating input into JSON by hand; prefer a tool that escape
 
 Plugins are shown with a tier: `official`, `verified` or `community`. The tier is **assigned by the catalog**, never by the manifest: a `trust` key in `plugin.yaml` is rejected. Authors cannot promote their own plugin.
 
+The trust root (the catalog's Ed25519 public key) is **never** read from the plugins directory,
+because that directory is untrusted: a cloned folder could ship its own key and signature. The
+key is a package resource, `packages/audidash-core/src/audidash_core/keys/catalog.pub`, which the
+maintainer adds at release time. Without it every plugin is `community` and asks for
+confirmation before running. `audidash --public-key PATH` overrides it explicitly (the CLI prints
+a notice that a custom trust root is in use).
+
 ## Computing hashes
 
 After any edit, recompute `files`. With the CLI (`audidash plugins hash` is available):
@@ -189,7 +196,7 @@ After any edit, recompute `files`. With the CLI (`audidash plugins hash` is avai
 audidash plugins hash <dir>
 ```
 
-Until then, use the Python fallback:
+Alternatively, use Python:
 
 ```python
 from pathlib import Path

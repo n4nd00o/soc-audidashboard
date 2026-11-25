@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from importlib import resources
 from pathlib import Path
 from typing import TextIO
 
@@ -9,7 +10,14 @@ import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from audidash_core.catalog import CatalogEntry, Trust, load_catalog, load_public_key
-from audidash_core.cli_format import clean, findings_table, source_text, summary, table
+from audidash_core.cli_format import (
+    clean,
+    clean_line,
+    findings_table,
+    source_text,
+    summary,
+    table,
+)
 from audidash_core.findings import FindingStatus
 from audidash_core.manifest import (
     IntegrityError,
@@ -29,7 +37,7 @@ EXIT_FAILED = 1
 EXIT_USAGE = 2
 
 DEFAULT_PLUGINS_DIR = "plugins"
-PUBLIC_KEY_NAME = "catalog.pub"
+PACKAGED_KEY = ("keys", "catalog.pub")
 ETHICAL_NOTICE = (
     "NOTICE: use audidash only on infrastructure you are authorized to audit. "
     "Unauthorized scanning may be illegal."
@@ -46,7 +54,13 @@ class UsageError(Exception):
 
 
 def _err(message: str) -> None:
-    print(message, file=sys.stderr)
+    """Print one sanitized line to stderr (messages may embed plugin-controlled text)."""
+    print(clean_line(message), file=sys.stderr)
+
+
+def _out(message: str) -> None:
+    """Print one sanitized line to stdout."""
+    print(clean_line(message))
 
 
 # ---------------------------------------------------------------- catalog helpers
@@ -56,10 +70,30 @@ def _plugins_dir(args: argparse.Namespace) -> Path:
     return Path(args.plugins_dir) if args.plugins_dir else Path(DEFAULT_PLUGINS_DIR)
 
 
-def _load_key(args: argparse.Namespace, plugins_dir: Path) -> Ed25519PublicKey | None:
-    """Public key from --public-key or <plugins_dir>/catalog.pub; None when absent/invalid."""
-    path = Path(args.public_key) if args.public_key else plugins_dir / PUBLIC_KEY_NAME
+def _packaged_key() -> Ed25519PublicKey | None:
+    """The maintainer's catalog key shipped inside the package, if any.
+
+    The trust root never comes from the (untrusted) plugins directory.
+    """
+    resource = resources.files("audidash_core").joinpath(*PACKAGED_KEY)
+    if not resource.is_file():
+        return None
+    try:
+        with resources.as_file(resource) as path:
+            return load_public_key(path)
+    except (ValueError, OSError) as exc:
+        _err(f"warning: ignoring malformed packaged public key: {exc}")
+        return None
+
+
+def _load_key(args: argparse.Namespace) -> Ed25519PublicKey | None:
+    """Explicit --public-key override, else the packaged key; None means all community."""
+    if not args.public_key:
+        return _packaged_key()
+    path = Path(args.public_key)
+    _err(f"notice: using custom trust root {path}")
     if not path.exists():
+        _err(f"warning: public key {path} not found; treating all plugins as community")
         return None
     try:
         return load_public_key(path)
@@ -70,14 +104,17 @@ def _load_key(args: argparse.Namespace, plugins_dir: Path) -> Ed25519PublicKey |
 
 def _catalog(args: argparse.Namespace) -> list[CatalogEntry]:
     plugins_dir = _plugins_dir(args)
-    return load_catalog(plugins_dir, _load_key(args, plugins_dir))
+    return load_catalog(plugins_dir, _load_key(args))
 
 
 def _find(args: argparse.Namespace, plugin_id: str) -> CatalogEntry:
-    for entry in _catalog(args):
-        if entry.manifest.id == plugin_id:
-            return entry
-    raise UsageError(f"unknown plugin {plugin_id!r} in {_plugins_dir(args)}")
+    matches = [e for e in _catalog(args) if e.manifest.id == plugin_id]
+    if len(matches) > 1:
+        dirs = ", ".join(str(e.path) for e in matches)
+        raise UsageError(f"ambiguous plugin id {plugin_id!r}: found in {dirs}")
+    if not matches:
+        raise UsageError(f"unknown plugin {plugin_id!r} in {_plugins_dir(args)}")
+    return matches[0]
 
 
 # ---------------------------------------------------------------- parameters
@@ -147,9 +184,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 def _cmd_show(args: argparse.Namespace) -> int:
     entry = _find(args, args.id)
+    try:
+        source = source_text(entry)
+    except OSError as exc:
+        _err(f"error: cannot read source of {entry.manifest.id}: {exc}")
+        return EXIT_FAILED
     print(summary(entry))
     print()
-    print(source_text(entry))
+    print(source)
     return EXIT_OK
 
 
@@ -203,23 +245,23 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     for plugin_dir in candidates:
         problem = _validate_one(plugin_dir)
         if problem is None:
-            print(f"ok      {plugin_dir.name}")
+            _out(f"ok      {plugin_dir.name}")
         else:
             failures += 1
-            _err(f"FAILED  {plugin_dir.name}: {clean(problem)}")
+            _err(f"FAILED  {plugin_dir.name}: {problem}")
     if not candidates:
         _err(f"error: no plugins found in {root}")
         return EXIT_FAILED
     return EXIT_FAILED if failures else EXIT_OK
 
 
-def _confirm(entry: CatalogEntry, assume_yes: bool, info: TextIO) -> bool:
+def _confirm(entry: CatalogEntry, source: str, assume_yes: bool, info: TextIO) -> bool:
     """Trust-tier gate; True when the run may proceed."""
     if entry.trust is not Trust.community:
-        print(f"Trust: {entry.trust.value} plugin {entry.manifest.id}", file=sys.stderr)
+        _err(f"Trust: {entry.trust.value} plugin {entry.manifest.id}")
         return True
     print(f"Trust: community plugin {entry.manifest.id} (unreviewed). Source:\n", file=info)
-    print(source_text(entry), file=info)
+    print(source, file=info)
     if assume_yes:
         return True
     if not sys.stdin.isatty():
@@ -231,12 +273,10 @@ def _confirm(entry: CatalogEntry, assume_yes: bool, info: TextIO) -> bool:
 
 
 def _report(result: RunResult, criticality: Criticality) -> None:
-    print(f"Plugin: {result.plugin_id} {result.plugin_version}  Target: {clean(result.target)}")
-    print(
-        f"Status: {result.status.value}" + (f" ({clean(result.reason)})" if result.reason else "")
-    )
+    _out(f"Plugin: {result.plugin_id} {result.plugin_version}  Target: {result.target}")
+    _out(f"Status: {result.status.value}" + (f" ({result.reason})" if result.reason else ""))
     for warning in result.warnings:
-        print(f"Warning: {clean(warning)}")
+        _out(f"Warning: {warning}")
     if result.findings:
         print()
         print(findings_table(result.findings))
@@ -260,7 +300,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
     params = _parse_params(manifest, args.param)
     info = sys.stderr if args.json else sys.stdout
     _err(ETHICAL_NOTICE)
-    if not _confirm(entry, args.yes, info):
+    source = ""
+    if entry.trust is Trust.community:
+        try:
+            source = source_text(entry)
+        except OSError as exc:
+            _err(f"error: cannot read source of {manifest.id}; plugin was not run: {exc}")
+            return EXIT_FAILED
+    if not _confirm(entry, source, args.yes, info):
         _err("aborted: plugin was not run")
         return EXIT_USAGE
     run_input = RunInput(
@@ -283,7 +330,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--plugins-dir", help=f"plugins directory (default ./{DEFAULT_PLUGINS_DIR})"
     )
     common.add_argument(
-        "--public-key", help=f"catalog public key (default <plugins-dir>/{PUBLIC_KEY_NAME})"
+        "--public-key", help="override the packaged catalog public key (custom trust root)"
     )
     parser = argparse.ArgumentParser(
         prog="audidash", description="SOC AudiDashboard plugin command line (student project)."
@@ -325,6 +372,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     parser = _build_parser()
     try:
         args = parser.parse_args(argv)
