@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp
 
 from audidash_server import __version__
+from audidash_server.db import init_db, make_engine, make_sessionmaker
 from audidash_server.security_headers import SecurityHeadersMiddleware
 from audidash_server.settings import Settings
 
@@ -36,6 +37,11 @@ def create_app(settings: Settings) -> FastAPI:
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
+    engine = make_engine(settings.database_url)
+    if settings.dev_mode and settings.database_url.startswith("sqlite"):
+        init_db(engine)  # dev convenience; production schema comes from Alembic only
+    app.state.engine = engine
+    app.state.sessionmaker = make_sessionmaker(engine)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/healthz")
