@@ -13,6 +13,7 @@ _SEMVER = (
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+_MAX_MANIFEST_BYTES = 256 * 1024
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -128,8 +129,11 @@ def load_manifest(plugin_dir: Path) -> PluginManifest:
     """Parse and validate ``plugin_dir/plugin.yaml``."""
     name = plugin_dir.name
     try:
-        raw = yaml.safe_load((plugin_dir / "plugin.yaml").read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        data = (plugin_dir / "plugin.yaml").read_bytes()
+        if len(data) > _MAX_MANIFEST_BYTES:
+            raise ManifestError(f"{name}: plugin.yaml exceeds {_MAX_MANIFEST_BYTES} bytes")
+        raw = yaml.safe_load(data.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
         raise ManifestError(f"{name}: cannot read plugin.yaml: {exc}") from exc
     if not isinstance(raw, dict):
         raise ManifestError(f"{name}: plugin.yaml must be a mapping")
@@ -158,9 +162,11 @@ def verify_integrity(plugin_dir: Path, manifest: PluginManifest) -> None:
             path = _resolve_inside(plugin_dir, relative)
         except ManifestError as exc:
             raise IntegrityError(str(exc)) from exc
-        if not path.is_file():
-            raise IntegrityError(f"{plugin_dir.name}: file {relative!r} is missing")
-        if _sha256(path) != expected:
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise IntegrityError(f"{plugin_dir.name}: cannot read {relative!r}: {exc}") from exc
+        if hashlib.sha256(data).hexdigest() != expected:
             raise IntegrityError(
                 f"{plugin_dir.name}: file {relative!r} was modified (hash mismatch)"
             )

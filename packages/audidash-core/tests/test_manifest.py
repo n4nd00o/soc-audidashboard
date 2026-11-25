@@ -55,7 +55,7 @@ def test_rejects_trust_field(tmp_path: Path) -> None:
 
 
 def test_rejects_unknown_runtime(tmp_path: Path) -> None:
-    with pytest.raises(ManifestError):
+    with pytest.raises(ManifestError, match="runtime"):
         load_manifest(make_plugin(tmp_path, runtime="ruby"))
 
 
@@ -74,7 +74,7 @@ def test_rejects_missing_manifest(tmp_path: Path) -> None:
 
 
 def test_rejects_bad_hash_format(tmp_path: Path) -> None:
-    with pytest.raises(ManifestError):
+    with pytest.raises(ManifestError, match="64 lowercase hex"):
         load_manifest(make_plugin(tmp_path, files={"run.py": "ABC"}))
 
 
@@ -162,3 +162,29 @@ def test_rejects_junction_escape(tmp_path: Path) -> None:
     _rewrite(plugin_dir, entrypoint="linked/evil.py", files={"linked/evil.py": "0" * 64})
     with pytest.raises(ManifestError):
         load_manifest(plugin_dir)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        (bytes([255, 254, 0]) + b"bad", "plugin.yaml"),
+        (b"[" * 5000, "plugin.yaml"),
+        (b"# " + b"x" * (256 * 1024), "exceeds"),
+        (b"", "mapping"),
+        (b"just a string", "mapping"),
+    ],
+)
+def test_rejects_bad_manifest_content(tmp_path: Path, content: bytes, message: str) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    (plugin_dir / "plugin.yaml").write_bytes(content)
+    with pytest.raises(ManifestError, match=message):
+        load_manifest(plugin_dir)
+
+
+def test_integrity_unreadable_path(tmp_path: Path) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    manifest = load_manifest(plugin_dir)
+    (plugin_dir / "run.py").unlink()
+    (plugin_dir / "run.py").mkdir()
+    with pytest.raises(IntegrityError, match="run"):
+        verify_integrity(plugin_dir, manifest)
