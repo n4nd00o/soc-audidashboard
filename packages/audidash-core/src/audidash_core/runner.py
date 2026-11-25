@@ -32,8 +32,8 @@ from audidash_core.manifest import (
     load_manifest,
     verify_integrity,
 )
-from audidash_core.proc import isolation_kwargs, kill_tree
-from audidash_core.sanitizer import _redact_capped, redact, sanitize_finding
+from audidash_core.proc import ProcessGroup
+from audidash_core.sanitizer import redact, redact_capped, sanitize_finding
 
 MAX_STDOUT_BYTES = 10 * 1024 * 1024
 DEFAULT_TIMEOUT_S = 300
@@ -46,6 +46,8 @@ _MAX_WARNINGS = 100
 _MAX_WARNING_CHARS = 1000
 _WINDOWS_ENV_KEYS = ("SYSTEMROOT", "COMSPEC", "PATHEXT")
 _HOME_ENV_KEYS = ("TEMP", "TMP", "HOME", "USERPROFILE")
+_MIN_SCRUB_CHARS = 4
+_CREDENTIAL_MARK = "[REDACTED:credential]"
 
 
 class RunInput(BaseModel):
@@ -110,10 +112,10 @@ def _stage_copy(plugin_dir: Path, manifest: PluginManifest, dest: Path) -> None:
     """Copy the hashed files into ``dest`` and verify the copied bytes."""
     for relative in manifest.files:
         target = dest / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
         try:
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes((plugin_dir / relative).read_bytes())
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             raise IntegrityError(f"{plugin_dir.name}: cannot read {relative!r}: {exc}") from exc
     verify_integrity(dest, manifest)
 
@@ -132,8 +134,8 @@ def _payload(run_input: RunInput) -> bytes:
 class _Capture:
     """Drains a child's pipes in background threads with bounded memory."""
 
-    def __init__(self, proc: subprocess.Popen[bytes], payload: bytes) -> None:
-        self._proc = proc
+    def __init__(self, group: ProcessGroup, proc: subprocess.Popen[bytes], payload: bytes) -> None:
+        self._group = group
         self.stdout = bytearray()
         self.stderr_tail = bytearray()
         self.stderr_truncated = False
@@ -159,7 +161,7 @@ class _Capture:
         while chunk := stream.read1(_CHUNK):  # type: ignore[attr-defined]
             if len(self.stdout) + len(chunk) > MAX_STDOUT_BYTES:
                 self.overflow = True
-                kill_tree(self._proc)
+                self._group.kill()
                 return
             self.stdout += chunk
 
@@ -178,13 +180,35 @@ class _Capture:
         return not any(thread.is_alive() for thread in self._threads)
 
 
-def _stderr_text(capture: _Capture) -> str:
+class _Scrubber:
+    """Replaces known plaintext credential values (after pattern redaction)."""
+
+    def __init__(self, credentials: dict[str, SecretStr]) -> None:
+        values = {v.get_secret_value() for v in credentials.values()}
+        self._values = sorted(
+            (v for v in values if len(v) >= _MIN_SCRUB_CHARS), key=len, reverse=True
+        )
+
+    def __call__(self, text: str) -> str:
+        for value in self._values:
+            text = text.replace(value, _CREDENTIAL_MARK)
+        return text
+
+    def finding(self, f: Finding) -> Finding:
+        # Scrub before sanitizing (so truncation cannot split a value) and after.
+        fields = ("title", "evidence", "recommendation")
+        f = f.model_copy(update={k: self(getattr(f, k)) for k in fields})
+        f = sanitize_finding(f)
+        return f.model_copy(update={k: self(getattr(f, k)) for k in fields})
+
+
+def _stderr_text(capture: _Capture, scrub: _Scrubber) -> str:
     text = bytes(capture.stderr_tail).decode("utf-8", errors="replace")
     if capture.stderr_truncated:
         # Drop the leading partial token so a cut secret cannot leak its suffix.
         cut = min((i for i in (text.find(c) for c in " \t\r\n") if i >= 0), default=-1)
         text = text[cut + 1 :] if cut >= 0 else ""
-    return redact(text)
+    return scrub(redact(text))
 
 
 def _parse(raw: bytes) -> PluginOutput | None:
@@ -194,14 +218,17 @@ def _parse(raw: bytes) -> PluginOutput | None:
         return None
 
 
-def run_local(
-    plugin_dir: Path, run_input: RunInput, timeout_s: int = DEFAULT_TIMEOUT_S
-) -> RunResult:
-    """Run a local plugin in isolation; plugin failures are reported via status."""
-    started_at = _now()
-    plugin_id, plugin_version = plugin_dir.name, ""
+class _Run:
+    """State of one ``run_local`` call; builds the RunResult."""
+
+    def __init__(self, plugin_dir: Path, run_input: RunInput) -> None:
+        self.started_at = _now()
+        self.plugin_id = plugin_dir.name
+        self.plugin_version = ""
+        self.target = run_input.target
 
     def result(
+        self,
         status: RunStatus,
         reason: str | None,
         findings: list[Finding] | None = None,
@@ -209,82 +236,104 @@ def run_local(
         stderr_tail: str = "",
     ) -> RunResult:
         return RunResult(
-            plugin_id=plugin_id,
-            plugin_version=plugin_version,
-            target=run_input.target,
+            plugin_id=self.plugin_id,
+            plugin_version=self.plugin_version,
+            target=self.target,
             status=status,
             reason=reason,
             findings=findings or [],
             warnings=warnings or [],
-            started_at=started_at,
+            started_at=self.started_at,
             finished_at=_now(),
             stderr_tail=stderr_tail,
         )
 
+
+def run_local(
+    plugin_dir: Path, run_input: RunInput, timeout_s: int = DEFAULT_TIMEOUT_S
+) -> RunResult:
+    """Run a local plugin in isolation; plugin failures are reported via status."""
+    run = _Run(plugin_dir, run_input)
+    try:
+        return _run_local(run, plugin_dir, run_input, timeout_s)
+    except Exception as exc:  # safety net: never let a plugin failure escape
+        # The ProcessGroup context in _run_local has already killed the tree.
+        return run.result(RunStatus.error, f"internal_error:{type(exc).__name__}")
+
+
+def _run_local(run: _Run, plugin_dir: Path, run_input: RunInput, timeout_s: int) -> RunResult:
     try:
         manifest = load_manifest(plugin_dir)
     except ManifestError as exc:
-        return result(RunStatus.blocked, f"manifest: {_short(str(exc))}")
-    plugin_id, plugin_version = manifest.id, manifest.version
+        return run.result(RunStatus.blocked, f"manifest: {_short(str(exc))}")
+    run.plugin_id, run.plugin_version = manifest.id, manifest.version
     if manifest.execution is not Execution.local:
-        return result(RunStatus.blocked, "remote_not_supported")
+        return run.result(RunStatus.blocked, "remote_not_supported")
     try:
         payload = _payload(run_input)
     except (TypeError, ValueError):
-        return result(RunStatus.error, "invalid_input")
+        return run.result(RunStatus.error, "invalid_input")
+    scrub = _Scrubber(run_input.credentials)
 
-    with tempfile.TemporaryDirectory(prefix="audidash-run-", ignore_cleanup_errors=True) as tmp:
+    with (
+        tempfile.TemporaryDirectory(prefix="audidash-run-", ignore_cleanup_errors=True) as tmp,
+        ProcessGroup() as group,
+    ):
         root = Path(tmp)
-        code_dir = root / (plugin_dir.resolve().name or "plugin")
+        code_dir = root / "plugin"
         home = root / "home"
         home.mkdir()
         try:
             _stage_copy(plugin_dir, manifest, code_dir)
         except IntegrityError as exc:
-            return result(RunStatus.blocked, f"integrity: {_short(str(exc))}")
+            return run.result(RunStatus.blocked, f"integrity: {_short(str(exc))}")
 
         argv = interpreter_argv(manifest.runtime, code_dir / manifest.entrypoint)
         try:
-            proc = subprocess.Popen(  # noqa: S603 - argv list, shell=False
+            proc = group.spawn(
                 argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=home,
                 env=_clean_env(home),
-                shell=False,
-                **isolation_kwargs(),
             )
         except OSError as exc:
-            return result(RunStatus.error, f"spawn_failed: {_short(str(exc))}")
+            return run.result(RunStatus.error, f"spawn_failed: {_short(str(exc))}")
 
-        capture = _Capture(proc, payload)
+        capture = _Capture(group, proc, payload)
         timed_out = False
         try:
             proc.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             timed_out = True
-            kill_tree(proc)
-            proc.wait()
+        # Always kill the whole group: leftover descendants must not outlive the run.
+        group.kill()
+        proc.wait()
         drained = capture.join(_DRAIN_TIMEOUT_S)
-        if not drained:
-            # A descendant still holds the pipes open: kill the group and retry.
-            kill_tree(proc)
-            drained = capture.join(_DRAIN_TIMEOUT_S)
-        stderr_tail = _stderr_text(capture)
+        if drained:
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    with contextlib.suppress(OSError):
+                        stream.close()
+        stderr_tail = _stderr_text(capture, scrub)
 
         if timed_out:
-            return result(RunStatus.timeout, "timeout", stderr_tail=stderr_tail)
+            return run.result(RunStatus.timeout, "timeout", stderr_tail=stderr_tail)
         if capture.overflow:
-            return result(RunStatus.error, "output_too_large", stderr_tail=stderr_tail)
+            return run.result(RunStatus.error, "output_too_large", stderr_tail=stderr_tail)
         if not drained:
-            return result(RunStatus.error, "output_not_closed", stderr_tail=stderr_tail)
+            return run.result(RunStatus.error, "output_not_closed", stderr_tail=stderr_tail)
         if proc.returncode != 0:
-            return result(RunStatus.error, f"exit_code:{proc.returncode}", stderr_tail=stderr_tail)
+            return run.result(
+                RunStatus.error, f"exit_code:{proc.returncode}", stderr_tail=stderr_tail
+            )
         output = _parse(bytes(capture.stdout))
         if output is None:
-            return result(RunStatus.error, "invalid_output", stderr_tail=stderr_tail)
+            return run.result(RunStatus.error, "invalid_output", stderr_tail=stderr_tail)
 
-    findings = [sanitize_finding(f) for f in output.findings]
-    warnings = [_redact_capped(w, _MAX_WARNING_CHARS) for w in output.warnings[:_MAX_WARNINGS]]
-    return result(RunStatus.ok, None, findings, warnings, stderr_tail)
+    findings = [scrub.finding(f) for f in output.findings]
+    warnings = [
+        scrub(redact_capped(scrub(w), _MAX_WARNING_CHARS)) for w in output.warnings[:_MAX_WARNINGS]
+    ]
+    return run.result(RunStatus.ok, None, findings, warnings, stderr_tail)

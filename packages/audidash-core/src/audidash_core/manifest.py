@@ -60,6 +60,8 @@ def _check_relative_path(value: str) -> str:
     """Syntactic check: POSIX-style relative path without escapes."""
     if not value:
         raise ValueError("path must not be empty")
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError(f"path {value!r} must not contain control characters")
     if "\\" in value:
         raise ValueError(f"path {value!r} must use forward slashes")
     if value.startswith("/") or ":" in value:
@@ -118,8 +120,11 @@ class PluginManifest(BaseModel):
 
 
 def _resolve_inside(plugin_dir: Path, relative: str) -> Path:
-    root = plugin_dir.resolve()
-    resolved = (plugin_dir / relative).resolve()
+    try:
+        root = plugin_dir.resolve()
+        resolved = (plugin_dir / relative).resolve()
+    except (OSError, ValueError) as exc:
+        raise ManifestError(f"{plugin_dir.name}: cannot resolve path {relative!r}: {exc}") from exc
     if not resolved.is_relative_to(root):
         raise ManifestError(f"{plugin_dir.name}: path {relative!r} resolves outside the plugin dir")
     return resolved

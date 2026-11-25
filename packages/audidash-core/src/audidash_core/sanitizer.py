@@ -75,7 +75,8 @@ def _bounded(text: str, limit: int) -> str:
     return text[:cut] if cut > 0 else text
 
 
-def _redact_capped(text: str, limit: int) -> str:
+def redact_capped(text: str, limit: int) -> str:
+    """Redact ``text`` with bounded work, truncating the result to ``limit`` chars."""
     redacted = redact(_bounded(text, limit))
     if len(redacted) > limit or len(text) > limit * _INPUT_MARGIN:
         redacted = redacted[:limit] + _TRUNCATED_SUFFIX
@@ -87,7 +88,7 @@ def sanitize_finding(f: Finding) -> Finding:
     return f.model_copy(
         update={
             "title": redact(_bounded(f.title, _MAX_TITLE_CHARS))[:_MAX_TITLE_CHARS],
-            "evidence": _redact_capped(f.evidence, MAX_EVIDENCE_CHARS),
-            "recommendation": _redact_capped(f.recommendation, MAX_EVIDENCE_CHARS),
+            "evidence": redact_capped(f.evidence, MAX_EVIDENCE_CHARS),
+            "recommendation": redact_capped(f.recommendation, MAX_EVIDENCE_CHARS),
         }
     )

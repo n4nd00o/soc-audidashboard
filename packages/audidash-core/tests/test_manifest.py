@@ -188,3 +188,13 @@ def test_integrity_unreadable_path(tmp_path: Path) -> None:
     (plugin_dir / "run.py").mkdir()
     with pytest.raises(IntegrityError, match="run"):
         verify_integrity(plugin_dir, manifest)
+
+
+@pytest.mark.parametrize("bad", ["a\x00b", "a\nb", "a\x1fb", "a\x7fb"])
+def test_control_characters_in_paths_rejected(tmp_path: Path, bad: str) -> None:
+    plugin_dir = make_plugin(tmp_path)
+    data = yaml.safe_load((plugin_dir / "plugin.yaml").read_text(encoding="utf-8"))
+    data["files"][bad] = "0" * 64
+    (plugin_dir / "plugin.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(ManifestError):
+        load_manifest(plugin_dir)

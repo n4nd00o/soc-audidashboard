@@ -292,3 +292,92 @@ def test_result_serializes(tmp_path: Path) -> None:
     plugin = make_plugin(tmp_path, "emit([finding()])\n")
     dumped = json.loads(run_local(plugin, _input()).model_dump_json())
     assert dumped["status"] == "ok"
+
+
+def _rewrite_files(plugin: Path, files: dict[str, str]) -> None:
+    path = plugin / "plugin.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["files"] = files
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+def test_blocked_on_file_used_as_directory(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    digest = compute_hashes(plugin, ["run.py"])["run.py"]
+    _rewrite_files(plugin, {"run.py": digest, "run.py/x": digest})
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.blocked
+    assert result.reason is not None
+    assert result.reason.startswith(("manifest", "integrity"))
+
+
+def test_blocked_on_nul_in_file_path(tmp_path: Path) -> None:
+    plugin = make_plugin(tmp_path, "emit()\n")
+    digest = compute_hashes(plugin, ["run.py"])["run.py"]
+    _rewrite_files(plugin, {"run.py": digest, "a\x00b": digest})
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.blocked
+    assert result.reason is not None and result.reason.startswith("manifest")
+
+
+def test_unexpected_exception_becomes_internal_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import audidash_core.runner as runner_mod
+
+    def boom(*_: object) -> None:
+        raise RuntimeError("raw detail must not leak")
+
+    monkeypatch.setattr(runner_mod, "_stage_copy", boom)
+    plugin = make_plugin(tmp_path, "emit()\n")
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.error
+    assert result.reason == "internal_error:RuntimeError"
+
+
+def test_leftover_children_killed_after_normal_exit(tmp_path: Path) -> None:
+    body = """\
+    import subprocess
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        **kwargs,
+    )
+    emit(warnings=["pid:" + str(child.pid)])
+    """
+    plugin = make_plugin(tmp_path, body)
+    started = time.monotonic()
+    result = run_local(plugin, _input(), timeout_s=20)
+    assert time.monotonic() - started < 15
+    assert result.status is RunStatus.ok, result
+    pid = int(result.warnings[0].removeprefix("pid:"))
+    deadline = time.monotonic() + 5
+    while _pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert not _pid_alive(pid)
+
+
+def test_known_credentials_scrubbed(tmp_path: Path) -> None:
+    secret = "hunter2-plain-value"  # noqa: S105 - test fixture
+    body = """\
+    s = payload["credentials"]["token"]
+    sys.stderr.write("stderr " + s + " end\\n")
+    emit(
+        [finding(title="t " + s, evidence="e " + s, recommendation="r " + s)],
+        ["w " + s],
+    )
+    """
+    plugin = make_plugin(tmp_path, body)
+    result = run_local(plugin, _input(credentials={"token": secret, "short": "abc"}))
+    assert result.status is RunStatus.ok, result
+    assert secret not in result.model_dump_json()
+    marker = "[REDACTED:credential]"
+    f = result.findings[0]
+    assert marker in f.title and marker in f.evidence and marker in f.recommendation
+    assert marker in result.warnings[0]
+    assert marker in result.stderr_tail
