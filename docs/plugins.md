@@ -13,7 +13,7 @@ plugins/
   meu-plugin/
     plugin.yaml      # manifesto (obrigatório)
     run.py           # ponto de entrada (qualquer arquivo listado em `files`)
-    helpers/...      # arquivos extras opcionais, também listados em `files`
+    helpers/...      # módulos extras opcionais (importáveis pelo entrypoint), devem constar em `files`
 ```
 
 Todo arquivo necessário ao plugin deve constar em `files` com o hash sha256. O runner copia os arquivos para um diretório temporário, confere os hashes da cópia e só então executa.

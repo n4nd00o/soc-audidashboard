@@ -13,7 +13,7 @@ plugins/
   my-plugin/
     plugin.yaml      # manifest (required)
     run.py           # entrypoint (any file listed in `files`)
-    helpers/...      # optional extra files, also listed in `files`
+    helpers/...      # optional extra modules (importable by the entrypoint), must be listed in `files`
 ```
 
 Every file the plugin needs must be listed in `files` with its sha256 hash. The runner copies the files to a temporary directory, verifies the hashes of the copy and only then runs it.

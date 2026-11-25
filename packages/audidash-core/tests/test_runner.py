@@ -276,11 +276,9 @@ def test_runs_from_path_with_space(tmp_path: Path) -> None:
 
 def test_interpreter_argv() -> None:
     entry = Path("/plugins/x/run")
-    argv = interpreter_argv(Runtime.python, entry)
-    assert argv[:3] == [sys.executable, "-I", "-S"]
-    assert argv[3] == "-c"
-    assert argv[-1] == str(entry)
-    assert (Path(argv[-2]) / "audidash_sdk" / "__init__.py").is_file()
+    argv = interpreter_argv(Runtime.python, entry, sdk_dir=Path("/sdk"), plugin_root=Path("/p"))
+    assert argv[:4] == [sys.executable, "-I", "-S", "-c"]
+    assert argv[5:] == [str(Path("/sdk")), str(Path("/p")), str(entry)]
     assert interpreter_argv(Runtime.powershell, entry) == [
         "pwsh",
         "-NoLogo",
@@ -414,3 +412,30 @@ def test_plugin_cannot_import_core(tmp_path: Path) -> None:
     result = run_local(plugin, _input())
     assert result.status is RunStatus.ok, result
     assert result.warnings == ["ImportError audidash_core", "ImportError pydantic"]
+
+
+def test_sdk_dir_contains_only_sdk(tmp_path: Path) -> None:
+    body = """
+    emit(warnings=[",".join(sorted(os.listdir(sys.path[0])))])
+    """
+    result = run_local(make_plugin(tmp_path, body), _input())
+    assert result.status is RunStatus.ok, result
+    assert result.warnings == ["audidash_sdk"]
+
+
+def test_plugin_can_import_listed_helper(tmp_path: Path) -> None:
+    plugin = make_plugin(
+        tmp_path,
+        """
+        import helper
+        emit(warnings=[helper.VALUE])
+        """,
+        extra_files={"helper.py": b'VALUE = "from-helper"\n'},
+    )
+    manifest_path = plugin / "plugin.yaml"
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    data["files"] = compute_hashes(plugin, ["run.py", "helper.py"])
+    manifest_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.ok, result
+    assert result.warnings == ["from-helper"]

@@ -11,6 +11,7 @@ import contextlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -80,26 +81,43 @@ class RunResult(BaseModel):
     stderr_tail: str
 
 
-# Runs the plugin with only the stdlib and the SDK importable: ``-S`` drops site-packages
-# (so audidash_core and pydantic are unreachable) and the SDK's parent dir is the sole addition.
+# Runs the plugin with only the stdlib, the staged SDK copy and the staged plugin dir importable:
+# ``-S`` drops site-packages (so audidash_core and pydantic are unreachable).
 _PY_BOOTSTRAP = (
-    "import sys, runpy; sdk, entry = sys.argv[1:3]; sys.argv = [entry]; "
-    "sys.path.insert(0, sdk); runpy.run_path(entry, run_name='__main__')"
+    "import sys, runpy; sdk, root, entry = sys.argv[1:4]; sys.argv = [entry]; "
+    "sys.path[:0] = [sdk, root]; runpy.run_path(entry, run_name='__main__')"
 )
 
 
-def _sdk_parent_dir() -> str:
+def _stage_sdk(dest: Path) -> Path:
+    """Copy the SDK's .py files to ``dest/audidash_sdk``; return ``dest`` (the sys.path entry).
+
+    Layout-independent: works for editable and site-packages installs alike, and the returned
+    directory contains nothing but the SDK package.
+    """
     spec = importlib.util.find_spec("audidash_sdk")
     if spec is None or spec.origin is None:
         raise RuntimeError("audidash_sdk is not installed")
-    return str(Path(spec.origin).resolve().parent.parent)
+    package = dest / "audidash_sdk"
+    package.mkdir(parents=True)
+    for source in Path(spec.origin).resolve().parent.glob("*.py"):
+        shutil.copyfile(source, package / source.name)
+    return dest
 
 
-def interpreter_argv(runtime: Runtime, entrypoint: Path) -> list[str]:
+def interpreter_argv(
+    runtime: Runtime,
+    entrypoint: Path,
+    *,
+    sdk_dir: Path | None = None,
+    plugin_root: Path | None = None,
+) -> list[str]:
     """Command line that runs ``entrypoint`` with the runtime's interpreter."""
     entry = str(entrypoint)
     if runtime is Runtime.python:
-        return [sys.executable, "-I", "-S", "-c", _PY_BOOTSTRAP, _sdk_parent_dir(), entry]
+        sdk = str(sdk_dir) if sdk_dir is not None else ""
+        root = str(plugin_root) if plugin_root is not None else str(entrypoint.parent)
+        return [sys.executable, "-I", "-S", "-c", _PY_BOOTSTRAP, sdk, root, entry]
     if runtime is Runtime.powershell:
         return ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", entry]
     return ["bash", "--noprofile", "--norc", entry]
@@ -304,7 +322,10 @@ def _run_local(run: _Run, plugin_dir: Path, run_input: RunInput, timeout_s: int)
         except IntegrityError as exc:
             return run.result(RunStatus.blocked, f"integrity: {_short(str(exc))}")
 
-        argv = interpreter_argv(manifest.runtime, code_dir / manifest.entrypoint)
+        sdk_dir = _stage_sdk(root / "sdk") if manifest.runtime is Runtime.python else None
+        argv = interpreter_argv(
+            manifest.runtime, code_dir / manifest.entrypoint, sdk_dir=sdk_dir, plugin_root=code_dir
+        )
         try:
             proc = group.spawn(
                 argv,
