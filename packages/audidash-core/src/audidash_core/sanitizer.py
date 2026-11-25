@@ -49,7 +49,7 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
             r"(?<![A-Za-z0-9])(password|passwd|pwd)"
             + _SEPARATOR
             + _QUOTED
-            + r"""|[^;\r\n"']{1,256}(?=;)|[^;\s]+)""",
+            + r"""|[^;\s"'][^;\r\n"']{0,255}(?=;)|[^;\s]+)""",
             re.IGNORECASE,
         ),
         r"\1\2[REDACTED:password]",

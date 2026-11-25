@@ -23,9 +23,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import IO, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
-from audidash_core.findings import Finding, PluginOutput
+from audidash_core.findings import (
+    MAX_ITEM_KEY_CHARS,
+    MAX_REFERENCE_CHARS,
+    Finding,
+    PluginOutput,
+)
 from audidash_core.manifest import (
     Execution,
     IntegrityError,
@@ -59,7 +64,7 @@ _CREDENTIAL_MARK = "[REDACTED:credential]"
 class RunInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target: str
+    target: str = Field(min_length=1, max_length=255)
     target_type: TargetType
     parameters: dict[str, object] = {}
     credentials: dict[str, SecretStr] = {}
@@ -222,6 +227,9 @@ class _Capture:
         return not any(thread.is_alive() for thread in self._threads)
 
 
+_MAX_FINDING_TITLE_CHARS = 200  # Finding.title limit
+
+
 class _Scrubber:
     """Replaces known plaintext credential values (after pattern redaction)."""
 
@@ -248,11 +256,14 @@ class _Scrubber:
         f = sanitize_finding(f)
         item_key = None if f.item_key is None else self.text(f.item_key)
         update: dict[str, object] = {k: self(getattr(f, k)) for k in fields}
-        update["references"] = [self.text(r) for r in f.references]
-        update["item_key"] = item_key
+        # Redaction can lengthen a field past the schema limits: truncate, then re-validate.
+        update["title"] = str(update["title"])[:_MAX_FINDING_TITLE_CHARS]
+        update["references"] = [self.text(r)[:MAX_REFERENCE_CHARS] for r in f.references]
+        update["item_key"] = None if item_key is None else item_key[:MAX_ITEM_KEY_CHARS]
         # The plugin cannot attribute a finding to an asset other than the one it was run on.
         update["target"] = target
-        return f.model_copy(update=update), item_key != f.item_key
+        clean = Finding.model_validate({**f.model_dump(), **update})
+        return clean, item_key != f.item_key
 
 
 def _stderr_text(capture: _Capture, scrub: _Scrubber) -> str:
