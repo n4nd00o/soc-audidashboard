@@ -41,7 +41,7 @@ This tool must only be used against systems you own or are explicitly authorized
   password in free text without a `password=`-style key) can still pass. / A sanitização é
   baseada em padrões e pode não detectar todo segredo.
 - **Official trust requires the maintainer's key.** The Ed25519 public key must be placed at
-  `packages/audidash-core/src/audidash_core/keys/catalog.pub` by the maintainer. It is not
-  present yet, so **all plugins are currently treated as `community`** (confirmation
-  required). See [docs/plugins.md](docs/plugins.md#níveis-de-confiança). / Enquanto a chave
-  pública não existir, todos os plugins são `community`.
+  `packages/audidash-core/src/audidash_core/keys/catalog.pub` by the maintainer (done for the bundled plugins). The matching private key is kept offline by
+  the maintainer; if it is lost, a new key must be issued and the catalog re-signed. See
+  [docs/plugins.md](docs/plugins.md#níveis-de-confiança). / A chave privada fica offline com o
+  mantenedor.

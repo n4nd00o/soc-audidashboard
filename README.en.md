@@ -1,6 +1,6 @@
 # SOC AudiDashboard
 
-![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/n4nd00o/soc-audidashboard/actions/workflows/ci.yml/badge.svg)
 
 > **Student project** · *Projeto estudantil* · [Versão em português](README.md)
 >
@@ -38,8 +38,9 @@ and recommendations.
 ## Trust root
 
 A plugin's trust tier (`official`, `verified`, `community`) comes from the signed catalog (Ed25519),
-never from the plugin's own manifest. Until the maintainer publishes the catalog public key, every
-plugin is `community`. See [docs/plugins.en.md](docs/plugins.en.md#trust-tiers).
+never from the plugin's own manifest. The bundled plugins are signed with the project key
+(`packages/audidash-core/src/audidash_core/keys/catalog.pub`) and show as `official`; anything
+else is `community` and asks for confirmation. See [docs/plugins.en.md](docs/plugins.en.md#trust-tiers).
 
 ## ISO 27001/27002 and LGPD alignment
 
@@ -52,8 +53,8 @@ advice; it is a design reference only.
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <repository-url>
-cd <repository-directory>
+git clone https://github.com/n4nd00o/soc-audidashboard.git
+cd soc-audidashboard
 uv sync
 uv run pytest -q
 

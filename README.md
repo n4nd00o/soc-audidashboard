@@ -1,6 +1,6 @@
 # SOC AudiDashboard
 
-![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/n4nd00o/soc-audidashboard/actions/workflows/ci.yml/badge.svg)
 
 > **Projeto estudantil** · *Student project* · [English version](README.en.md)
 >
@@ -38,8 +38,9 @@ padronizados, classificados por severidade e enviados de forma segura a um servi
 ## Raiz de confiança
 
 O nível de confiança (`official`, `verified`, `community`) vem do catálogo assinado (Ed25519), nunca do
-manifesto do plugin. Enquanto o mantenedor não publicar a chave pública do catálogo, todo plugin é
-`community`. Detalhes em [docs/plugins.md](docs/plugins.md#níveis-de-confiança).
+manifesto do plugin. Os plugins incluídos são assinados com a chave do projeto
+(`packages/audidash-core/src/audidash_core/keys/catalog.pub`) e aparecem como `official`; os demais
+são `community` e pedem confirmação. Detalhes em [docs/plugins.md](docs/plugins.md#níveis-de-confiança).
 
 ## Alinhamento com ISO 27001/27002 e LGPD
 
@@ -52,8 +53,8 @@ sanitização na origem, segurança por design). Isso **não** é certificação
 Requer Python 3.12+ e [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <url-do-repositorio>
-cd <diretorio-do-repositorio>
+git clone https://github.com/n4nd00o/soc-audidashboard.git
+cd soc-audidashboard
 uv sync
 uv run pytest -q
 

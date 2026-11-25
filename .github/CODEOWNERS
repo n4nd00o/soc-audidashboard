@@ -1,7 +1,6 @@
-# Replace @OWNER with the repository owner's GitHub handle when publishing.
-*                                                 @OWNER
-/.github/                                         @OWNER
-/SECURITY.md                                      @OWNER
-/docs/compliance/                                 @OWNER
-/packages/audidash-core/src/audidash_core/keys/   @OWNER
-/tools/sign_catalog.py                            @OWNER
+*                                                 @n4nd00o
+/.github/                                         @n4nd00o
+/SECURITY.md                                      @n4nd00o
+/docs/compliance/                                 @n4nd00o
+/packages/audidash-core/src/audidash_core/keys/   @n4nd00o
+/tools/sign_catalog.py                            @n4nd00o

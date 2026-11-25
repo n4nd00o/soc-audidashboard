@@ -32,4 +32,4 @@ Invalid parameters or an unresolvable host produce one warning and no findings. 
 uv run audidash run network-port-scan --target 192.0.2.10 --target-type network
 ```
 
-(The `audidash run` command arrives with the CLI task; until then use `audidash_core.runner.run_local`.)
+(Run it with `uv run audidash run <plugin-id> ...`; see the main README.)

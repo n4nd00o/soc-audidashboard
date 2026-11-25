@@ -42,5 +42,5 @@ First alpha: the foundation and core of the platform (Plan 1). CLI only.
 - Non-Python interpreters are resolved on the plugin's PATH (`interpreter_not_found:<name>`).
 
 ### Notes
-- No catalog public key ships yet, so all plugins are treated as `community` until the
-  maintainer adds `keys/catalog.pub`.
+- The catalog public key ships in `keys/catalog.pub`; the three bundled plugins are signed and
+  load as `official`.

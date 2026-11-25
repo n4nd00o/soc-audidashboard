@@ -34,4 +34,4 @@ An invalid URL or an unreachable server produces one warning and no findings.
 uv run audidash run http-security-headers --target https://example.org --target-type web
 ```
 
-(The `audidash run` command arrives with the CLI task; until then use `audidash_core.runner.run_local`.)
+(Run it with `uv run audidash run <plugin-id> ...`; see the main README.)

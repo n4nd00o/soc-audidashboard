@@ -36,4 +36,4 @@ The certificate is fetched with an unverified handshake and its validity dates a
 uv run audidash run tls-certificate-check --target example.org --target-type network --param port=443
 ```
 
-(The `audidash run` command arrives with the CLI task; until then use `audidash_core.runner.run_local`.)
+(Run it with `uv run audidash run <plugin-id> ...`; see the main README.)
