@@ -11,10 +11,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from audidash_core.catalog import CatalogEntry, Trust, load_catalog, load_public_key
 from audidash_core.cli_format import (
+    TROJAN_SOURCE_WARNING,
     clean,
     clean_line,
     findings_table,
-    source_text,
+    has_invisible_chars,
+    read_sources,
+    render_source,
     summary,
     table,
 )
@@ -185,13 +188,15 @@ def _cmd_list(args: argparse.Namespace) -> int:
 def _cmd_show(args: argparse.Namespace) -> int:
     entry = _find(args, args.id)
     try:
-        source = source_text(entry)
+        files = read_sources(entry)
     except OSError as exc:
         _err(f"error: cannot read source of {entry.manifest.id}: {exc}")
         return EXIT_FAILED
     print(summary(entry))
     print()
-    print(source)
+    if has_invisible_chars(files):
+        print(TROJAN_SOURCE_WARNING)
+    print(render_source(files))
     return EXIT_OK
 
 
@@ -255,13 +260,21 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return EXIT_FAILED if failures else EXIT_OK
 
 
-def _confirm(entry: CatalogEntry, source: str, assume_yes: bool, info: TextIO) -> bool:
-    """Trust-tier gate; True when the run may proceed."""
+def _confirm(entry: CatalogEntry, files: dict[str, bytes], assume_yes: bool, info: TextIO) -> bool:
+    """Trust-tier gate; True when the run may proceed.
+
+    The manifest summary (permissions, connection, parameters) is shown for every tier;
+    community plugins also show the full source of ``files`` and need confirmation.
+    """
+    print(summary(entry), file=info)
+    print(file=info)
     if entry.trust is not Trust.community:
         _err(f"Trust: {entry.trust.value} plugin {entry.manifest.id}")
         return True
     print(f"Trust: community plugin {entry.manifest.id} (unreviewed). Source:\n", file=info)
-    print(source, file=info)
+    print(render_source(files), file=info)
+    if has_invisible_chars(files):
+        print(f"\n{TROJAN_SOURCE_WARNING}", file=info)
     if assume_yes:
         return True
     if not sys.stdin.isatty():
@@ -300,14 +313,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
     params = _parse_params(manifest, args.param)
     info = sys.stderr if args.json else sys.stdout
     _err(ETHICAL_NOTICE)
-    source = ""
+    files: dict[str, bytes] = {}
     if entry.trust is Trust.community:
         try:
-            source = source_text(entry)
+            files = read_sources(entry)
         except OSError as exc:
             _err(f"error: cannot read source of {manifest.id}; plugin was not run: {exc}")
             return EXIT_FAILED
-    if not _confirm(entry, source, args.yes, info):
+    if not _confirm(entry, files, args.yes, info):
         _err("aborted: plugin was not run")
         return EXIT_USAGE
     run_input = RunInput(

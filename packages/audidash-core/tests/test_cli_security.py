@@ -1,11 +1,13 @@
 """CLI output hardening: plugin-controlled text must never reach the terminal raw."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from audidash_core import cli
+from audidash_core.catalog import CatalogEntry, Trust, load_catalog
 from audidash_core.cli_format import clean, clean_line
-from test_cli import _run, make_plugin
+from test_cli import _run, _Tty, make_plugin
 
 EVIL = "x\x1b[31m\nFORGED\ty\x85z"
 RUN_ARGV = ["run", "demo-plugin", "--target", "h", "--target-type", "local", "--yes"]
@@ -120,3 +122,106 @@ def test_run_unreadable_source_runs_nothing(
     assert code == 1
     assert "Traceback" not in out + err
     assert "was not run" in err
+
+
+BACKSLASH = chr(92)
+INVISIBLE = [
+    *(chr(c) for c in range(0x202A, 0x202F)),
+    *(chr(c) for c in range(0x2066, 0x206A)),
+    *(chr(c) for c in range(0x200B, 0x2010)),
+    chr(0xFEFF),
+]
+RLO, LRI, PDI, ZWSP = chr(0x202E), chr(0x2066), chr(0x2069), chr(0x200B)
+TROJAN_WARNING = "WARNING: source contains invisible or bidirectional"
+
+
+def _esc(char: str) -> str:
+    return BACKSLASH + f"u{ord(char):04x}"
+
+
+@pytest.mark.parametrize("char", INVISIBLE)
+def test_clean_escapes_bidi_and_invisible(char: str) -> None:
+    assert clean(f"a{char}b") == f"a{_esc(char)}b"
+    assert clean_line(f"a{char}b") == f"a{_esc(char)}b"
+
+
+@pytest.mark.parametrize("char", [chr(0x2028), chr(0x2029)])
+def test_clean_escapes_line_separators(char: str) -> None:
+    assert clean(f"a{char}b") == f"a{_esc(char)}b"
+
+
+def test_run_warns_on_trojan_source_before_prompt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = (
+        f'access = "user{RLO} {LRI}# admin only{PDI} {LRI}"\n'
+        'print(json.dumps({"findings": []}))\n'
+    )
+    make_plugin(tmp_path, body)
+    monkeypatch.setattr("sys.stdin", _Tty("n\n"))
+    argv = ["run", "demo-plugin", "--target", "h", "--plugins-dir", str(tmp_path)]
+    code, out, _ = _run(argv, capsys)
+    assert code == 2
+    assert RLO not in out
+    assert _esc(RLO) in out
+    assert out.index(TROJAN_WARNING) < out.index("Run this community plugin? [y/N]")
+
+
+def test_show_warns_on_trojan_source(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    make_plugin(tmp_path, f'x = "{ZWSP}"\n')
+    code, out, _ = _run(["plugins", "show", "demo-plugin", "--plugins-dir", str(tmp_path)], capsys)
+    assert code == 0
+    assert TROJAN_WARNING in out
+
+
+def test_clean_source_has_no_trojan_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_plugin(tmp_path)
+    _, out, err = _run([*RUN_ARGV, "--plugins-dir", str(tmp_path)], capsys)
+    assert "WARNING: source contains" not in out + err
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_run_shows_permissions_summary_before_execution(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    json_mode: bool,
+) -> None:
+    marker = tmp_path / "ran.marker"
+    make_plugin(
+        tmp_path / "plugins",
+        f'open({str(marker)!r}, "w").close()\nprint(json.dumps({{"findings": []}}))\n',
+        permissions=["reads /etc/ssh/sshd_config"],
+    )
+    monkeypatch.setattr("sys.stdin", _Tty("n\n"))
+    argv = ["run", "demo-plugin", "--target", "h", "--plugins-dir", str(tmp_path / "plugins")]
+    code, out, err = _run([*argv, "--json"] if json_mode else argv, capsys)
+    assert code == 2
+    assert not marker.exists()
+    info = err if json_mode else out
+    assert "permissions:" in info
+    assert "  - reads /etc/ssh/sshd_config" in info
+    assert "connection:  local" in info
+    assert "runtime:     python" in info
+    assert "port (integer)" in info  # parameters
+    assert info.index("permissions:") < info.index("Run this community plugin?")
+    if json_mode:
+        assert "permissions:" not in out
+
+
+def test_trusted_run_also_shows_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_plugin(tmp_path, permissions=["reads nothing"])
+
+    def as_verified(plugins_dir: Path, public_key: object) -> list[CatalogEntry]:
+        return [replace(e, trust=Trust.verified) for e in load_catalog(plugins_dir, None)]
+
+    monkeypatch.setattr(cli, "load_catalog", as_verified)
+    code, out, _ = _run([*RUN_ARGV, "--plugins-dir", str(tmp_path)], capsys)
+    assert code == 0
+    assert "  - reads nothing" in out
+    assert "trust:       verified" in out
+    assert out.index("permissions:") < out.index("Status:")
