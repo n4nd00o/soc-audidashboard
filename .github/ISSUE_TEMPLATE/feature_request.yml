@@ -1,0 +1,28 @@
+name: Feature request / Sugestão de recurso
+description: Propose an improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Problema
+      description: What are you trying to do that is hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / Solução proposta
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / Alternativas consideradas
+  - type: checkboxes
+    id: ethics
+    attributes:
+      label: Ethical use / Uso ético
+      options:
+        - label: This feature is for auditing systems the user owns or is authorized to audit.
+          required: true

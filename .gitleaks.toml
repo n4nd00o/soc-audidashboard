@@ -1,0 +1,14 @@
+title = "SOC AudiDashboard gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures that intentionally contain fake secrets"
+paths = [
+  '''packages/audidash-core/tests/test_sanitizer\.py''',
+  '''packages/audidash-core/tests/test_runner\.py''',
+]
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+]

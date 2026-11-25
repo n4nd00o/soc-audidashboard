@@ -21,3 +21,25 @@ lab targets under `lab/`.
 ## Ethical use
 
 This tool must only be used against systems you own or are explicitly authorized to audit.
+
+## Known limitations / Limitações conhecidas
+
+- **Windows spawn race.** There is a short window between spawning a plugin process and
+  assigning it to its Job Object; a plugin that spawns children immediately could escape
+  the kill-on-close guarantee in that window. / Há uma janela curta entre criar o processo
+  do plugin e associá-lo ao Job Object no Windows.
+- **POSIX `setsid()` escape.** On POSIX the whole process group is killed with `killpg`, but a
+  child that calls `setsid()` leaves the group and survives. / Em POSIX, um filho que chama
+  `setsid()` escapa do `killpg`.
+- **Port-scan budget vs. runner timeout.** A `budget_s` above roughly 295 s for the
+  `network-port-scan` plugin can exceed the runner's 300 s timeout, so the run is killed
+  instead of finishing with a budget warning. / Um `budget_s` acima de ~295 s pode estourar o
+  tempo limite de 300 s do executor.
+- **Credential scrubbing coverage.** Redaction covers `title`, `evidence`, `recommendation`,
+  `warnings` and `stderr`, but **not** `target`, `references` or `item_key`; do not put
+  secrets in those fields. / A sanitização não cobre `target`, `references` nem `item_key`.
+- **Official trust requires the maintainer's key.** The Ed25519 public key must be placed at
+  `packages/audidash-core/src/audidash_core/keys/catalog.pub` by the maintainer. It is not
+  present yet, so **all plugins are currently treated as `community`** (confirmation
+  required). See [docs/plugins.md](docs/plugins.md#níveis-de-confiança). / Enquanto a chave
+  pública não existir, todos os plugins são `community`.

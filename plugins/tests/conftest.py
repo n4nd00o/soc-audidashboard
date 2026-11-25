@@ -2,6 +2,7 @@
 
 import datetime as dt
 import ipaddress
+import os
 import socket
 import ssl
 import threading
@@ -260,3 +261,17 @@ def tls_server(tmp_path: Path) -> Iterator[Callable[..., Server]]:
 @pytest.fixture
 def cert_factory() -> Callable[..., tuple[Path, Path]]:
     return make_cert
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip ``network_blackhole`` tests when ``AUDIDASH_SKIP_BLACKHOLE=1``.
+
+    Those tests probe 10.255.255.1 and need the network to silently drop packets,
+    which some CI runners do not guarantee.
+    """
+    if os.environ.get("AUDIDASH_SKIP_BLACKHOLE") != "1":
+        return
+    skip = pytest.mark.skip(reason="AUDIDASH_SKIP_BLACKHOLE=1: network black-holing not assumed")
+    for item in items:
+        if "network_blackhole" in item.keywords:
+            item.add_marker(skip)

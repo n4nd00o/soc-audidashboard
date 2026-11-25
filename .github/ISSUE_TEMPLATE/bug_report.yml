@@ -1,0 +1,46 @@
+name: Bug report / Relatório de bug
+description: Something does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do **not** report security vulnerabilities here; see SECURITY.md.
+        Remove secrets, real hostnames and personal data from anything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened? / O que aconteceu?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / Comportamento esperado
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / Passos para reproduzir
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit / Versão ou commit
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system / Sistema operacional
+      options: [Windows, Linux, macOS, Other]
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version / Versão do Python
+      placeholder: "3.12"

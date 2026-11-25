@@ -1,0 +1,40 @@
+name: Plugin request / Pedido de plugin
+description: Suggest a new audit plugin.
+labels: ["plugin"]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Plugin name / Nome do plugin
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: What should it check? / O que deve verificar?
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target type / Tipo de alvo
+      options: [linux, windows, aws, azure, gcp, m365, network, web]
+    validations:
+      required: true
+  - type: dropdown
+    id: language
+    attributes:
+      label: Preferred language / Linguagem preferida
+      options: [Python, PowerShell, Bash, Any]
+  - type: textarea
+    id: standards
+    attributes:
+      label: Related standards or references / Normas ou referências relacionadas
+      placeholder: "e.g. ISO 27002 8.8, OWASP, CIS Benchmark"
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation / Confirmação
+      options:
+        - label: The plugin is read-only/non-destructive and only targets systems the user is authorized to audit.
+          required: true

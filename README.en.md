@@ -1,5 +1,7 @@
 # SOC AudiDashboard
 
+![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)
+
 > **Student project** · *Projeto estudantil* · [Versão em português](README.md)
 >
 > This is an open-source **student** project built for a portfolio. It is not a certified
@@ -32,6 +34,12 @@ and recommendations.
         ▼
    Targets: Linux, Windows, AWS, Azure, GCP, M365, network, web
 ```
+
+## Trust root
+
+A plugin's trust tier (`official`, `verified`, `community`) comes from the signed catalog (Ed25519),
+never from the plugin's own manifest. Until the maintainer publishes the catalog public key, every
+plugin is `community`. See [docs/plugins.en.md](docs/plugins.en.md#trust-tiers).
 
 ## ISO 27001/27002 and LGPD alignment
 

@@ -1,5 +1,7 @@
 # SOC AudiDashboard
 
+![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)
+
 > **Projeto estudantil** · *Student project* · [English version](README.en.md)
 >
 > Este é um projeto **estudantil**, open source, feito para portfólio. Não é um produto certificado
@@ -32,6 +34,12 @@ padronizados, classificados por severidade e enviados de forma segura a um servi
         ▼
    Alvos: Linux, Windows, AWS, Azure, GCP, M365, rede, web
 ```
+
+## Raiz de confiança
+
+O nível de confiança (`official`, `verified`, `community`) vem do catálogo assinado (Ed25519), nunca do
+manifesto do plugin. Enquanto o mantenedor não publicar a chave pública do catálogo, todo plugin é
+`community`. Detalhes em [docs/plugins.md](docs/plugins.md#níveis-de-confiança).
 
 ## Alinhamento com ISO 27001/27002 e LGPD
 

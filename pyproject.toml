@@ -31,6 +31,17 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["packages", "plugins"]
 addopts = "-ra"
+markers = [
+    "network_blackhole: needs 10.255.255.1 to silently drop packets (skip with AUDIDASH_SKIP_BLACKHOLE=1)",
+]
+
+[tool.coverage.run]
+source = ["audidash_core", "audidash_sdk"]
+branch = false
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
 
 [tool.ruff]
 line-length = 100

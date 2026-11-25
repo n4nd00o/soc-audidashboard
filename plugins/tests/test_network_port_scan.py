@@ -81,6 +81,7 @@ def test_port_count_is_capped(run_plugin: Any) -> None:
     assert any("1024" in w for w in result.warnings)
 
 
+@pytest.mark.network_blackhole
 def test_time_budget_skips_remaining_ports(run_plugin: Any) -> None:
     # Unroutable address: every probe waits for its timeout, so the 1s budget runs out.
     ports = list(range(1, 400))
@@ -89,6 +90,7 @@ def test_time_budget_skips_remaining_ports(run_plugin: Any) -> None:
     assert any("budget" in w for w in result.warnings)
 
 
+@pytest.mark.network_blackhole
 def test_silent_host_warns_once(run_plugin: Any) -> None:
     result = _scan(run_plugin, "10.255.255.1", ports=[80, 443], timeout_ms=300)
     assert result.status is RunStatus.ok

@@ -12,7 +12,9 @@ import importlib.util
 import json
 import os
 import shutil
-import subprocess
+
+# Reason: used for types/exceptions; process spawning is centralised in proc.py.
+import subprocess  # nosec B404
 import sys
 import tempfile
 import threading

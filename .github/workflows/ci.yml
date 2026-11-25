@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The 10.255.255.1 black-hole tests are not reliable on shared CI runners.
+  AUDIDASH_SKIP_BLACKHOLE: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install (locked)
+        run: uv sync --locked
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Type check (mypy)
+        run: uv run mypy packages
+
+      - name: Tests with coverage
+        run: uv run pytest --cov --cov-fail-under=85
+
+      - name: SAST (bandit)
+        run: uv run bandit -q -r packages plugins tools -x "*/tests/*"
+
+      - name: Dependency audit (pip-audit)
+        run: uv run pip-audit
+
+      - name: Validate bundled plugins
+        run: uv run audidash plugins validate plugins

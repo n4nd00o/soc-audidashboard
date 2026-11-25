@@ -9,7 +9,9 @@ leads a new session and the group is killed with ``killpg``.
 import contextlib
 import os
 import signal
-import subprocess
+
+# Reason: spawning plugin processes is this module's purpose (argv lists, shell=False).
+import subprocess  # nosec B404
 import sys
 import threading
 from pathlib import Path
@@ -128,7 +130,8 @@ def kill_tree(p: subprocess.Popen[bytes]) -> None:
     if sys.platform == "win32":
         if p.poll() is None:  # taskkill on an exited PID could hit a reused one
             with contextlib.suppress(OSError, subprocess.SubprocessError):
-                subprocess.run(  # noqa: S603 - fixed argv, no shell
+                # Reason: fixed argv (taskkill), no shell, no user input beyond the pid.
+                subprocess.run(  # noqa: S603  # nosec B603
                     [_taskkill(), "/F", "/T", "/PID", str(p.pid)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -167,7 +170,8 @@ class ProcessGroup:
             raise RuntimeError("ProcessGroup already spawned a process")
         if sys.platform == "win32":
             self._job = _create_kill_on_close_job()
-        proc: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603 - argv list
+        # Reason: argv list with shell=False; the plugin path is validated by the manifest.
+        proc: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603  # nosec B603
             argv, shell=False, **popen_kwargs, **isolation_kwargs()
         )
         self.proc = proc
