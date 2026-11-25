@@ -1,0 +1,28 @@
+id: network-port-scan
+name: Network port scan
+version: 0.1.0
+author: SOC AudiDashboard contributors
+license: Apache-2.0
+description: TCP connect scan that reports open ports and risky exposed services.
+runtime: python
+execution: local
+entrypoint: run.py
+files:
+  run.py: "121bca2ec34cca8a26123704064e10f06949c4b94ac4cbc74fd8586fb8e08311"
+targets: [network]
+connection: network
+permissions:
+  - "Opens TCP connections to the target on the configured ports"
+  - "Sends no payloads and needs no credentials"
+references:
+  - "CIS Control 4.4"
+  - "ISO27002:2022 8.20"
+parameters:
+  ports:
+    type: list
+    default: []
+    description: Ports to scan (integers 1-65535); empty or omitted uses the built-in top-100 TCP list
+  timeout_ms:
+    type: integer
+    default: 500
+    description: Per-port connect timeout in milliseconds

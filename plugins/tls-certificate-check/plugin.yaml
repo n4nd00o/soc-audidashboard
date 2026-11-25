@@ -1,0 +1,23 @@
+id: tls-certificate-check
+name: TLS certificate check
+version: 0.1.0
+author: SOC AudiDashboard contributors
+license: Apache-2.0
+description: Checks certificate expiry, trust, host name match and deprecated TLS versions.
+runtime: python
+execution: local
+entrypoint: run.py
+files:
+  run.py: "bc37cede251cc1664233b7714a55492de96d25d6641687726efac93e0f5173c4"
+targets: [web, network]
+connection: network
+permissions:
+  - "Opens TCP/TLS connections to the target on the configured port"
+  - "Reads the server certificate; sends no application data and needs no credentials"
+references:
+  - "ISO27002:2022 8.24"
+parameters:
+  port:
+    type: integer
+    default: 443
+    description: TCP port of the TLS service

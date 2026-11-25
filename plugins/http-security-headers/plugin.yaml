@@ -1,0 +1,24 @@
+id: http-security-headers
+name: HTTP security headers
+version: 0.1.0
+author: SOC AudiDashboard contributors
+license: Apache-2.0
+description: Checks a URL's response for common security headers and version disclosure.
+runtime: python
+execution: local
+entrypoint: run.py
+files:
+  run.py: "32088877040e35f9fcb1b5799e9a5becabf1aee2e54e34922d7cfd3b69fca12f"
+targets: [web]
+connection: network
+permissions:
+  - "Sends one HTTP GET request to the target URL"
+  - "Does not follow redirects and needs no credentials"
+references:
+  - "OWASP ASVS 14.4"
+  - "ISO27002:2022 8.26"
+parameters:
+  url:
+    type: string
+    default: ""
+    description: URL to check (http or https); defaults to the run target
