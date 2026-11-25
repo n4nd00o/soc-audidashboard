@@ -201,3 +201,75 @@ def test_sign_tool_main_importable(tmp_path: Path) -> None:
     assert isinstance(key, Ed25519PrivateKey)
     raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     assert base64.b64decode(pub.read_text()) == raw
+
+
+def _signed(tmp_path: Path) -> Ed25519PrivateKey:
+    key = Ed25519PrivateKey.generate()
+    make_plugin(tmp_path)
+    write_signed_index(tmp_path, key)
+    return key
+
+
+@pytest.mark.parametrize(
+    "sig", ["ééé".encode(), base64.b64encode(b"short"), b"!!not base64!!", b"\xff\xfe"]
+)
+def test_malformed_signature_is_community(tmp_path: Path, sig: bytes) -> None:
+    key = _signed(tmp_path)
+    (tmp_path / "index.sig").write_bytes(sig)
+    assert [e.trust for e in load_catalog(tmp_path, key.public_key())] == [Trust.community]
+
+
+@pytest.mark.parametrize(
+    "content", [b"not json", b"[]", b'{"demo-plugin": 5}', b'{"demo-plugin": []}']
+)
+def test_validly_signed_bad_index_is_community(tmp_path: Path, content: bytes) -> None:
+    key = _signed(tmp_path)
+    (tmp_path / "index.json").write_bytes(content)
+    (tmp_path / "index.sig").write_bytes(base64.b64encode(sign_index(content, key)))
+    assert [e.trust for e in load_catalog(tmp_path, key.public_key())] == [Trust.community]
+
+
+def test_community_when_plugin_yaml_edited(tmp_path: Path) -> None:
+    key = _signed(tmp_path)
+    path = tmp_path / "demo-plugin" / "plugin.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["permissions"] = ["read-only", "admin"]
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    assert [e.trust for e in load_catalog(tmp_path, key.public_key())] == [Trust.community]
+
+
+def test_build_index_rejects_duplicate_ids(tmp_path: Path) -> None:
+    make_plugin(tmp_path)
+    dup = make_plugin(tmp_path, "copy-plugin")
+    data = yaml.safe_load((dup / "plugin.yaml").read_text(encoding="utf-8"))
+    data["id"] = "demo-plugin"
+    (dup / "plugin.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate"):
+        build_index(tmp_path)
+
+
+def test_missing_plugins_dir_returns_empty(tmp_path: Path) -> None:
+    assert load_catalog(tmp_path / "nope", None) == []
+
+
+def test_sign_tool_refuses_stale_plugin(tmp_path: Path) -> None:
+    tool = _load_tool()
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    plugin = make_plugin(plugins)
+    priv, pub = tmp_path / "a.pem", tmp_path / "a.pub"
+    assert tool.main(["keygen", "--private-out", str(priv), "--public-out", str(pub)]) == 0
+    (plugin / "run.py").write_bytes(b"changed\n")
+    argv = ["sign", "--plugins-dir", str(plugins), "--private-key", str(priv)]
+    assert tool.main(argv) == 1
+    assert not (plugins / "index.sig").exists()
+    (plugin / "plugin.yaml").write_text("broken: [", encoding="utf-8")
+    assert tool.main(argv) == 1
+
+
+def test_keygen_refuses_overwrite_main(tmp_path: Path) -> None:
+    tool = _load_tool()
+    priv, pub = tmp_path / "a.pem", tmp_path / "a.pub"
+    pub.write_text("x")
+    assert tool.main(["keygen", "--private-out", str(priv), "--public-out", str(pub)]) == 1
+    assert not priv.exists()

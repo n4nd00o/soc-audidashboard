@@ -1,7 +1,6 @@
 """Ed25519-signed plugin catalog and trust-tier assignment."""
 
 import base64
-import binascii
 import hashlib
 import json
 import logging
@@ -43,11 +42,14 @@ class CatalogEntry:
     trust: Trust
 
 
+def _b64_file(path: Path) -> bytes:
+    """Strict base64 decode of an ASCII text file; raises ValueError on bad content."""
+    return base64.b64decode(path.read_bytes().decode("ascii").strip(), validate=True)
+
+
 def load_public_key(path: Path) -> Ed25519PublicKey:
     """Load a raw 32-byte Ed25519 public key stored as base64 text."""
-    return Ed25519PublicKey.from_public_bytes(
-        base64.b64decode(path.read_text().strip(), validate=True)
-    )
+    return Ed25519PublicKey.from_public_bytes(_b64_file(path))
 
 
 def load_private_key(path: Path) -> Ed25519PrivateKey:
@@ -59,11 +61,24 @@ def load_private_key(path: Path) -> Ed25519PrivateKey:
 
 
 def _plugin_dirs(plugins_dir: Path) -> list[Path]:
-    return sorted(p for p in plugins_dir.iterdir() if p.is_dir() and (p / "plugin.yaml").is_file())
+    try:
+        children = list(plugins_dir.iterdir())
+    except OSError as exc:
+        logger.warning("cannot list plugins dir %s: %s", plugins_dir, exc)
+        return []
+    return sorted(p for p in children if p.is_dir() and (p / "plugin.yaml").is_file())
+
+
+def _manifest_digest(plugin_dir: Path) -> str:
+    return hashlib.sha256((plugin_dir / "plugin.yaml").read_bytes()).hexdigest()
 
 
 def build_index(plugins_dir: Path) -> bytes:
-    """Canonical JSON of ``{plugin_id: {"version", "files"}}`` for all valid plugins."""
+    """Canonical JSON of ``{id: {"version", "files", "manifest"}}`` for all valid plugins.
+
+    ``manifest`` is the sha256 of plugin.yaml bytes, so the signature covers the whole
+    manifest (entrypoint, runtime, permissions...). Duplicate ids raise ValueError.
+    """
     index: dict[str, dict[str, object]] = {}
     for plugin_dir in _plugin_dirs(plugins_dir):
         try:
@@ -71,7 +86,13 @@ def build_index(plugins_dir: Path) -> bytes:
         except ManifestError as exc:
             logger.warning("skipping %s: %s", plugin_dir.name, exc)
             continue
-        index[manifest.id] = {"version": manifest.version, "files": manifest.files}
+        if manifest.id in index:
+            raise ValueError(f"duplicate plugin id {manifest.id!r} ({plugin_dir.name})")
+        index[manifest.id] = {
+            "version": manifest.version,
+            "files": manifest.files,
+            "manifest": _manifest_digest(plugin_dir),
+        }
     return json.dumps(index, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
@@ -97,9 +118,11 @@ def _load_signed_index(
     try:
         index_bytes = (plugins_dir / INDEX_NAME).read_bytes()
         signature = base64.b64decode(
-            (plugins_dir / SIGNATURE_NAME).read_text().strip(), validate=True
+            (plugins_dir / SIGNATURE_NAME).read_bytes().decode("ascii").strip(), validate=True
         )
-    except (OSError, UnicodeDecodeError, binascii.Error):
+    except ValueError:  # UnicodeDecodeError and binascii.Error are ValueErrors
+        return None
+    except OSError:
         return None
     if not verify_index(index_bytes, signature, public_key):
         logger.warning("catalog index signature is invalid; treating plugins as unsigned")
@@ -122,8 +145,10 @@ def _is_official(
     if entry.get("version") != manifest.version or entry.get("files") != manifest.files:
         return False
     try:
+        if entry.get("manifest") != _manifest_digest(plugin_dir):
+            return False
         verify_integrity(plugin_dir, manifest)
-    except IntegrityError:
+    except (IntegrityError, OSError):
         return False
     return True
 
@@ -142,6 +167,9 @@ def load_catalog(
     verified_hashes: set[str] | frozenset[str] = frozenset(),
 ) -> list[CatalogEntry]:
     """Discover plugins and assign a trust tier to each, sorted by plugin id."""
+    if not plugins_dir.is_dir():
+        logger.warning("plugins dir %s does not exist", plugins_dir)
+        return []
     index = _load_signed_index(plugins_dir, public_key)
     entries: list[CatalogEntry] = []
     for plugin_dir in _plugin_dirs(plugins_dir):
