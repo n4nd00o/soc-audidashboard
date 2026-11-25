@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises:
-Create Date: 2026-11-25 20:47:54.750352
+Create Date: 2026-11-25 20:53:56.289906
 """
 
 from collections.abc import Sequence
@@ -32,7 +32,12 @@ def upgrade() -> None:
     )
     op.create_table(
         "audit_log",
-        sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column(
+            "seq",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
         sa.Column("at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("actor_user_id", sa.Uuid(), nullable=True),
         sa.Column("actor_device_id", sa.Uuid(), nullable=True),
@@ -70,6 +75,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("cert_fingerprint"),
     )
+    with op.batch_alter_table("devices", schema=None) as batch_op:
+        batch_op.create_index(
+            batch_op.f("ix_devices_owner_user_id"), ["owner_user_id"], unique=False
+        )
+
     op.create_table(
         "sessions",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -108,6 +118,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("token_sha256"),
     )
+    with op.batch_alter_table("api_tokens", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_api_tokens_device_id"), ["device_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_api_tokens_user_id"), ["user_id"], unique=False)
+
     op.create_table(
         "enrollment_tokens",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -121,6 +135,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("token_sha256"),
     )
+    with op.batch_alter_table("enrollment_tokens", schema=None) as batch_op:
+        batch_op.create_index(
+            batch_op.f("ix_enrollment_tokens_created_by"), ["created_by"], unique=False
+        )
+
     op.create_table(
         "runs",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -130,7 +149,7 @@ def upgrade() -> None:
         sa.Column("plugin_id", sa.String(length=128), nullable=False),
         sa.Column("plugin_version", sa.String(length=64), nullable=False),
         sa.Column("manifest_sha256", sa.String(length=64), nullable=False),
-        sa.Column("trust", sa.String(length=32), nullable=False),
+        sa.Column("trust", sa.String(length=32), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
@@ -146,6 +165,8 @@ def upgrade() -> None:
         batch_op.create_index(
             "ix_runs_asset_id_finished_at", ["asset_id", "finished_at"], unique=False
         )
+        batch_op.create_index(batch_op.f("ix_runs_device_id"), ["device_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_runs_user_id"), ["user_id"], unique=False)
 
     op.create_table(
         "findings",
@@ -179,6 +200,7 @@ def upgrade() -> None:
             "ix_findings_asset_id_plugin_id", ["asset_id", "plugin_id"], unique=False
         )
         batch_op.create_index("ix_findings_asset_id_status", ["asset_id", "status"], unique=False)
+        batch_op.create_index(batch_op.f("ix_findings_last_run_id"), ["last_run_id"], unique=False)
 
     op.create_table(
         "finding_events",
@@ -208,21 +230,34 @@ def downgrade() -> None:
 
     op.drop_table("finding_events")
     with op.batch_alter_table("findings", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_findings_last_run_id"))
         batch_op.drop_index("ix_findings_asset_id_status")
         batch_op.drop_index("ix_findings_asset_id_plugin_id")
 
     op.drop_table("findings")
     with op.batch_alter_table("runs", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_runs_user_id"))
+        batch_op.drop_index(batch_op.f("ix_runs_device_id"))
         batch_op.drop_index("ix_runs_asset_id_finished_at")
 
     op.drop_table("runs")
+    with op.batch_alter_table("enrollment_tokens", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_enrollment_tokens_created_by"))
+
     op.drop_table("enrollment_tokens")
+    with op.batch_alter_table("api_tokens", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_api_tokens_user_id"))
+        batch_op.drop_index(batch_op.f("ix_api_tokens_device_id"))
+
     op.drop_table("api_tokens")
     op.drop_table("verified_plugins")
     with op.batch_alter_table("sessions", schema=None) as batch_op:
         batch_op.drop_index("ix_sessions_user_id")
 
     op.drop_table("sessions")
+    with op.batch_alter_table("devices", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_devices_owner_user_id"))
+
     op.drop_table("devices")
     op.drop_table("users")
     op.drop_table("audit_log")
