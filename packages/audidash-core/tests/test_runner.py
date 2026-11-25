@@ -11,14 +11,17 @@ from typing import Any
 
 import pytest
 import yaml
+from audidash_core.findings import Category, Finding, Severity
 from audidash_core.manifest import Runtime, TargetType, compute_hashes, load_manifest
 from audidash_core.runner import (
     MAX_STDOUT_BYTES,
     RunInput,
     RunStatus,
+    _Scrubber,
     interpreter_argv,
     run_local,
 )
+from pydantic import ValidationError
 
 # Prepended to every fake plugin: reads the stdin payload and offers an emit() helper.
 _PRELUDE = """\
@@ -628,3 +631,33 @@ def test_missing_interpreter_reports_error(tmp_path: Path, monkeypatch: pytest.M
     result = run_local(plugin, _input())
     assert result.status is RunStatus.error
     assert result.reason == "interpreter_not_found:bash"
+
+
+def test_runinput_target_bounded() -> None:
+    with pytest.raises(ValidationError):
+        _input(target="a" * 256)
+    with pytest.raises(ValidationError):
+        _input(target="")
+    assert _input(target="a" * 255).target == "a" * 255
+
+
+def test_redacted_fields_respect_limits() -> None:
+    # Each "token=ab&" (9 chars) becomes longer once redacted, so the fields overflow.
+    key = ("token=ab&" * 29)[:255]
+    ref = ("token=ab&" * 23)[:200]
+    finding = Finding(
+        id="X-1",
+        title=("token=ab " * 40)[:200],
+        severity=Severity.low,
+        category=Category.misconfiguration,
+        target="host-01",
+        references=[ref],
+        item_key=key,
+    )
+    assert len(key) == 255
+    out, redacted = _Scrubber({}).finding(finding, "host-01")
+    assert redacted
+    assert len(out.item_key or "") <= 255
+    assert len(out.title) <= 200
+    assert all(len(r) <= 200 for r in out.references)
+    Finding.model_validate(out.model_dump())

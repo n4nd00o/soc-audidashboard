@@ -171,3 +171,9 @@ def test_new_rules_are_fast_on_huge_input(unit: str) -> None:
     start = time.perf_counter()
     redact(text)
     assert time.perf_counter() - start < 1.0
+
+
+def test_password_rule_fast_on_whitespace() -> None:
+    start = time.perf_counter()
+    redact("password=" + " " * 1_000_000)
+    assert time.perf_counter() - start < 1.0
