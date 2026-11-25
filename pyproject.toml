@@ -33,14 +33,14 @@ dev = [
 testpaths = ["packages", "plugins"]
 addopts = "-ra"
 filterwarnings = [
-    "ignore:Using .httpx. with .starlette.testclient. is deprecated:DeprecationWarning",
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated",
 ]
 markers = [
     "network_blackhole: needs 10.255.255.1 to silently drop packets (skip with AUDIDASH_SKIP_BLACKHOLE=1)",
 ]
 
 [tool.coverage.run]
-source = ["audidash_core", "audidash_sdk"]
+source = ["audidash_core", "audidash_sdk", "audidash_server"]
 branch = false
 
 [tool.coverage.report]

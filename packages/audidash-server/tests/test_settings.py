@@ -70,3 +70,14 @@ def test_env_prefix_and_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.retention_days == 30
     assert s.session_idle_minutes == 30
     assert s.session_absolute_hours == 12
+
+
+@pytest.mark.parametrize("flag", ["on", "y", "True", "1", "t"])
+def test_dev_mode_env_spellings_fill_secrets(monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
+    for name in ("SECRET_KEY", "PROXY_SECRET", "CA_PASSPHRASE"):
+        monkeypatch.delenv(f"AUDIDASH_{name}", raising=False)
+    monkeypatch.setenv("AUDIDASH_DEV_MODE", flag)
+    s = Settings()
+    assert s.dev_mode is True
+    for secret in (s.secret_key, s.proxy_secret, s.ca_passphrase):
+        assert len(secret.get_secret_value()) >= 32

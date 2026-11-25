@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.types import ASGIApp
 
 from audidash_server import __version__
 from audidash_server.security_headers import SecurityHeadersMiddleware
@@ -16,9 +17,18 @@ STATIC_DIR = PACKAGE_DIR / "static"
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
 
 
+class _OutermostHeadersFastAPI(FastAPI):
+    """FastAPI whose security-headers layer wraps ServerErrorMiddleware too (covers 500s)."""
+
+    def build_middleware_stack(self) -> ASGIApp:
+        return SecurityHeadersMiddleware(super().build_middleware_stack())
+
+
 def create_app(settings: Settings) -> FastAPI:
     docs = settings.dev_mode
-    app = FastAPI(
+    if not settings.dev_mode:
+        settings.validate_for_production()
+    app = _OutermostHeadersFastAPI(
         title="SOC AudiDashboard",
         version=__version__,
         docs_url="/docs" if docs else None,
@@ -26,7 +36,6 @@ def create_app(settings: Settings) -> FastAPI:
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
-    app.add_middleware(SecurityHeadersMiddleware)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/healthz")
