@@ -8,7 +8,7 @@ runtime: python
 execution: local
 entrypoint: run.py
 files:
-  run.py: "bc37cede251cc1664233b7714a55492de96d25d6641687726efac93e0f5173c4"
+  run.py: "158f83170ef849bae3b6c492864512c1bf3f349caa645a96d32b42e3f23dc742"
 targets: [web, network]
 connection: network
 permissions:

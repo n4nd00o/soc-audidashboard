@@ -1,6 +1,7 @@
 """TCP connect scan of a target host; reports open ports and risky exposed services."""
 
 import socket
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -33,18 +34,27 @@ RISKY_PORTS = {
 }
 REFERENCES = ["CIS Control 4.4", "ISO27002:2022 8.20"]
 MAX_WORKERS = 50
-OPEN, CLOSED, NO_ANSWER = "open", "closed", "no-answer"
+MAX_PORTS = 1024
+OPEN, CLOSED, NO_ANSWER, SKIPPED = "open", "closed", "no-answer", "skipped"
 
 
 def parse_ports(value: object) -> list[int]:
-    if not isinstance(value, list) or not value:
-        raise ValueError("'ports' must be a non-empty list of integers")
+    if not value:  # missing or empty: use the built-in list
+        return list(DEFAULT_PORTS)
+    if not isinstance(value, list):
+        raise ValueError("'ports' must be a list of integers")
     ports: list[int] = []
     for item in value:
         if isinstance(item, bool) or not isinstance(item, int) or not 1 <= item <= 65535:
             raise ValueError(f"invalid port {item!r}: ports must be integers from 1 to 65535")
         ports.append(item)
     return sorted(set(ports))
+
+
+def parse_budget(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 3600:
+        raise ValueError("'budget_s' must be an integer from 1 to 3600")
+    return float(value)
 
 
 def parse_timeout(value: object) -> float:
@@ -70,9 +80,13 @@ def main(data: dict[str, Any], report: Reporter) -> None:
     try:
         ports = parse_ports(params.get("ports", DEFAULT_PORTS))
         timeout = parse_timeout(params.get("timeout_ms", 500))
+        budget = parse_budget(params.get("budget_s", 240))
     except ValueError as exc:
         report.warn(f"Invalid parameters, nothing scanned: {exc}")
         return
+    if len(ports) > MAX_PORTS:
+        report.warn(f"Too many ports ({len(ports)}); only the first {MAX_PORTS} are scanned.")
+        ports = ports[:MAX_PORTS]
     host = str(data["target"])
     try:
         family, _, _, _, sockaddr = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)[0]
@@ -81,11 +95,18 @@ def main(data: dict[str, Any], report: Reporter) -> None:
         return
     ip = str(sockaddr[0])
 
+    deadline = time.monotonic() + budget
+
     def check(port: int) -> str:
+        if time.monotonic() >= deadline:
+            return SKIPPED
         return probe((ip, port), family, timeout)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         states = dict(zip(ports, pool.map(check, ports), strict=True))
+    skipped = sum(1 for state in states.values() if state == SKIPPED)
+    if skipped:
+        report.warn(f"Time budget of {budget:g}s exhausted; {skipped} ports were not scanned.")
 
     open_ports = [port for port, state in states.items() if state == OPEN]
     for port in open_ports:

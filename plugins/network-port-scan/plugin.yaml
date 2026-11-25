@@ -8,7 +8,7 @@ runtime: python
 execution: local
 entrypoint: run.py
 files:
-  run.py: "121bca2ec34cca8a26123704064e10f06949c4b94ac4cbc74fd8586fb8e08311"
+  run.py: "60ed7dcc15843ebd73ccb7cc721c89de8b01a603201c396cc9e98644245db42d"
 targets: [network]
 connection: network
 permissions:
@@ -21,8 +21,12 @@ parameters:
   ports:
     type: list
     default: []
-    description: Ports to scan (integers 1-65535); empty or omitted uses the built-in top-100 TCP list
+    description: Ports to scan (integers 1-65535, at most 1024); empty or omitted uses the built-in top-100 TCP list
   timeout_ms:
     type: integer
     default: 500
     description: Per-port connect timeout in milliseconds
+  budget_s:
+    type: integer
+    default: 240
+    description: Overall time budget in seconds; ports not probed by then are skipped with a warning

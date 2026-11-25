@@ -53,7 +53,11 @@ def free_port() -> int:
 class TcpListener:
     def __init__(self, port: int = 0) -> None:
         self._sock = socket.socket()
-        self._sock.bind((HOST, port))
+        try:
+            self._sock.bind((HOST, port))
+        except OSError:
+            self._sock.close()
+            raise
         self._sock.listen(16)
         self.port = int(self._sock.getsockname()[1])
         self._thread = threading.Thread(target=self._accept, daemon=True)
@@ -92,10 +96,16 @@ def make_cert(
     names: list[str],
     not_before: dt.datetime,
     not_after: dt.datetime,
+    ca_signed: bool = False,
 ) -> tuple[Path, Path]:
-    """Create a self-signed certificate; returns (cert_path, key_path)."""
+    """Create a certificate (self-signed, or signed by a throwaway unknown CA).
+
+    Returns (cert_path, key_path).
+    """
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, names[0])])
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Unknown Test CA")])
     sans: list[x509.GeneralName] = []
     for name in names:
         try:
@@ -105,13 +115,13 @@ def make_cert(
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
-        .issuer_name(subject)
+        .issuer_name(ca_name if ca_signed else subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(not_before)
         .not_valid_after(not_after)
         .add_extension(x509.SubjectAlternativeName(sans), critical=False)
-        .sign(key, hashes.SHA256())
+        .sign(ca_key if ca_signed else key, hashes.SHA256())
     )
     cert_path = directory / "cert.pem"
     key_path = directory / "key.pem"
@@ -222,6 +232,7 @@ def tls_server(tmp_path: Path) -> Iterator[Callable[..., Server]]:
         names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         legacy: bool = False,
+        ca_signed: bool = False,
     ) -> Server:
         now = dt.datetime.now(dt.UTC)
         directory = tmp_path / f"cert{len(servers)}"
@@ -231,6 +242,7 @@ def tls_server(tmp_path: Path) -> Iterator[Callable[..., Server]]:
             names or ["localhost", HOST],
             not_before=now - dt.timedelta(days=400),
             not_after=now + dt.timedelta(days=days_left),
+            ca_signed=ca_signed,
         )
         try:
             context = tls_server_context(cert, key, legacy=legacy)

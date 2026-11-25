@@ -35,10 +35,12 @@ def test_risky_port_reported_as_high(run_plugin: Any, tcp_listener: Callable[...
     assert "CIS Control 4.4" in by_id["NET-RISKY-PORT"].references
 
 
+# Windows reports a refused loopback connection only after ~2 s, hence the long timeout.
 def test_closed_port_gives_no_findings(run_plugin: Any, free_port: int) -> None:
-    result = _scan(run_plugin, "127.0.0.1", ports=[free_port], timeout_ms=2000)
+    result = _scan(run_plugin, "127.0.0.1", ports=[free_port], timeout_ms=5000)
     assert result.status is RunStatus.ok
     assert result.findings == []
+    assert result.warnings == []
 
 
 def test_unresolvable_target_warns_once(run_plugin: Any) -> None:
@@ -59,7 +61,36 @@ def test_invalid_parameters_warn_once(run_plugin: Any, params: dict[str, object]
     assert len(result.warnings) == 1
 
 
-def test_default_port_list_is_used_without_ports(run_plugin: Any) -> None:
-    result = _scan(run_plugin, "127.0.0.1", timeout_ms=300)
+@pytest.mark.parametrize("params", [{}, {"ports": []}])
+def test_default_port_list_used_when_ports_missing_or_empty(
+    run_plugin: Any, tcp_listener: Callable[..., Any], params: dict[str, object]
+) -> None:
+    try:
+        tcp_listener(8080)
+    except OSError:
+        pytest.skip("port 8080 is in use on this machine")
+    result = _scan(run_plugin, "127.0.0.1", timeout_ms=1000, **params)
     assert result.status is RunStatus.ok
-    assert all(f.id in {"NET-OPEN-PORT", "NET-RISKY-PORT"} for f in result.findings)
+    assert ("NET-OPEN-PORT", "8080") in {(f.id, f.item_key) for f in result.findings}
+
+
+def test_port_count_is_capped(run_plugin: Any) -> None:
+    ports = list(range(20000, 20000 + 1030))
+    result = _scan(run_plugin, "127.0.0.1", ports=ports, timeout_ms=200, budget_s=60)
+    assert result.status is RunStatus.ok
+    assert any("1024" in w for w in result.warnings)
+
+
+def test_time_budget_skips_remaining_ports(run_plugin: Any) -> None:
+    # Unroutable address: every probe waits for its timeout, so the 1s budget runs out.
+    ports = list(range(1, 400))
+    result = _scan(run_plugin, "10.255.255.1", ports=ports, timeout_ms=1500, budget_s=1)
+    assert result.status is RunStatus.ok
+    assert any("budget" in w for w in result.warnings)
+
+
+def test_silent_host_warns_once(run_plugin: Any) -> None:
+    result = _scan(run_plugin, "10.255.255.1", ports=[80, 443], timeout_ms=300)
+    assert result.status is RunStatus.ok
+    assert result.findings == []
+    assert len(result.warnings) == 1

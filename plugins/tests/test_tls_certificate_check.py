@@ -62,6 +62,22 @@ def test_hostname_mismatch_is_high(run_plugin: Any, tls_server: Callable[..., An
     assert finding.severity.value == "high"
 
 
+def test_unknown_ca_with_wrong_name_reports_mismatch_not_self_signed(
+    run_plugin: Any, tls_server: Callable[..., Any]
+) -> None:
+    result = _check(run_plugin, tls_server(names=["other.example"], ca_signed=True).port)
+    assert "TLS-HOSTNAME-MISMATCH" in _ids(result)
+    assert "TLS-SELF-SIGNED" not in _ids(result)
+
+
+def test_unknown_ca_with_right_name_is_not_labelled_self_signed(
+    run_plugin: Any, tls_server: Callable[..., Any]
+) -> None:
+    result = _check(run_plugin, tls_server(ca_signed=True).port)
+    assert _ids(result).isdisjoint({"TLS-SELF-SIGNED", "TLS-HOSTNAME-MISMATCH"})
+    assert len(result.warnings) == 1
+
+
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_weak_protocol_tls10(run_plugin: Any, tls_server: Callable[..., Any]) -> None:
     server = tls_server(legacy=True)
