@@ -113,7 +113,6 @@ def current_session(request: Request, db: Annotated[DbSession, Depends(get_sessi
     loaded = _load(request, db)
     if loaded is None or loaded[0].mfa_pending:
         raise NotAuthenticated
-    request.state.auth_session = loaded[0]
     request.state.user = loaded[1]
     return loaded[0]
 

@@ -7,7 +7,8 @@ from typing import Any
 import pyotp
 import pytest
 from audidash_server import cli
-from audidash_server.auth import passwords
+from audidash_server.auth import passwords, routes
+from audidash_server.auth.lockout import clear_failures_if_unlocked, record_failure
 from audidash_server.auth.passwords import (
     WeakPasswordError,
     hash_password,
@@ -19,6 +20,7 @@ from audidash_server.auth.sessions import SESSION_COOKIE
 from audidash_server.auth.totp import (
     decrypt_totp_secret,
     encrypt_totp_secret,
+    totp_match_step,
     totp_secret_new,
     totp_verify,
 )
@@ -114,6 +116,8 @@ def test_totp_verify_window(frozen_clock: Any) -> None:
     assert totp_verify(secret, totp.at(now))
     assert totp_verify(secret, totp.at(now - timedelta(seconds=30)))
     assert totp_verify(secret, totp.at(now + timedelta(seconds=30)))
+    assert not totp_verify(secret, totp.at(now - timedelta(seconds=60)))
+    assert not totp_verify(secret, totp.at(now + timedelta(seconds=60)))
     assert not totp_verify(secret, totp.at(now - timedelta(seconds=90)))
     assert not totp_verify(secret, "12345")
     assert not totp_verify(secret, "abcdef")
@@ -181,8 +185,11 @@ def test_lockout_after_five_failures(
     app_client: TestClient, make_user: Any, login: Any, frozen_clock: Any
 ) -> None:
     u = make_user()
-    for _ in range(5):
+    for i in range(4):
         assert login(u.username, "Wrong-password-123", "000000").status_code == 401
+        user = _user(app_client, u.username)
+        assert (user.failed_logins, user.locked_until) == (i + 1, None)
+    assert login(u.username, "Wrong-password-123", "000000").status_code == 401
     user = _user(app_client, u.username)
     assert user.locked_until == frozen_clock.current + timedelta(minutes=15)
     r = login(u.username, u.password, u.code(frozen_clock.current))
@@ -432,3 +439,190 @@ def test_create_admin_success_and_idempotency(
     assert cli.main(["create-admin", "--username", "root"]) == 1
     assert "existe" in capsys.readouterr().err
     assert len(_users(cli_env)) == 1
+
+
+# --- fix round 1: atomic lockout, timing, enrolment edge cases ------------------------
+
+
+def test_failure_increment_is_sql_side(
+    app_client: TestClient, make_user: Any, frozen_clock: Any
+) -> None:
+    u = make_user()
+    factory = app_client.app.state.sessionmaker  # type: ignore[attr-defined]
+    with factory() as a, factory() as b:
+        stale_a = a.get(User, u.id)
+        stale_b = b.get(User, u.id)
+        assert stale_a is not None and stale_b is not None
+        assert stale_a.failed_logins == stale_b.failed_logins == 0  # both read k = 0
+        assert record_failure(a, u.id, frozen_clock.current) is False
+        a.commit()
+        assert record_failure(b, u.id, frozen_clock.current) is False
+        b.commit()
+    assert _user(app_client, u.username).failed_logins == 2  # k + 2, no lost update
+
+
+def test_lock_triggers_at_exactly_five_sql_side(
+    app_client: TestClient, make_user: Any, frozen_clock: Any
+) -> None:
+    u = make_user()
+    factory = app_client.app.state.sessionmaker  # type: ignore[attr-defined]
+    results = []
+    for _ in range(5):
+        with factory() as db:
+            results.append(record_failure(db, u.id, frozen_clock.current))
+            db.commit()
+    assert results == [False, False, False, False, True]
+    user = _user(app_client, u.username)
+    assert user.locked_until == frozen_clock.current + timedelta(minutes=15)
+    with factory() as db:  # a stale "not locked" guess cannot complete a login
+        assert clear_failures_if_unlocked(db, u.id, frozen_clock.current) is False
+
+
+def test_every_failure_path_does_the_same_db_write(
+    app_client: TestClient,
+    make_user: Any,
+    login: Any,
+    frozen_clock: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+    real = record_failure
+
+    def spy(db: Any, user_id: Any, now: Any) -> bool:
+        calls.append(user_id)
+        return real(db, user_id, now)
+
+    monkeypatch.setattr(routes, "record_failure", spy)
+    u = make_user()
+    make_user("off", Role.viewer)
+    with app_client.app.state.sessionmaker() as s:  # type: ignore[attr-defined]
+        off = s.scalars(select(User).where(User.username == "off")).one()
+        off.disabled = True
+        s.commit()
+    login("ghost", "Wrong-password-123", "000000")  # unknown
+    login("off", u.password, "000000")  # disabled
+    login(u.username, "Wrong-password-123", "000000")  # counted
+    assert calls == [None, None, u.id]
+    for _ in range(4):
+        login(u.username, "Wrong-password-123", "000000")
+    calls.clear()
+    login(u.username, u.password, u.code(frozen_clock.current))  # locked
+    assert calls == [None]
+
+
+def _pending_client(app_client: TestClient, make_user: Any, login: Any, name: str) -> Any:
+    u = make_user(name, Role.viewer, with_totp=False)
+    assert login(u.username, u.password).headers["location"] == "/totp/setup"
+    return u
+
+
+def _setup_fields(page: str) -> dict[str, str]:
+    fields = {}
+    for name in ("setup_token", "csrf_token"):
+        m = re.search(rf'name="{name}" value="([^"]+)"', page)
+        assert m
+        fields[name] = m.group(1)
+    secret = re.search(r'<code class="totp-secret">([A-Z2-7]+)</code>', page)
+    assert secret
+    fields["secret"] = secret.group(1)
+    return fields
+
+
+def test_pending_session_capped_at_10_minutes(
+    app_client: TestClient, make_user: Any, login: Any, frozen_clock: Any
+) -> None:
+    _pending_client(app_client, make_user, login, "slow")
+    frozen_clock.advance(minutes=9, seconds=59)
+    assert app_client.get("/totp/setup").status_code == 200
+    frozen_clock.advance(seconds=2)  # 10 min 01 s after creation, though not idle
+    r = app_client.get("/totp/setup", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    assert _sessions(app_client) == []
+
+
+def test_setup_token_for_another_user_rejected(
+    app_client: TestClient, make_user: Any, login: Any, frozen_clock: Any
+) -> None:
+    _pending_client(app_client, make_user, login, "victim")
+    victim = _setup_fields(app_client.get("/totp/setup").text)
+    other = TestClient(app_client.app, base_url="https://testserver")
+    o = make_user("mallory", Role.viewer, with_totp=False)
+    page = other.get("/login")
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+    assert csrf
+    other.post(
+        "/login",
+        data={"username": o.username, "password": o.password, "csrf_token": csrf.group(1)},
+    )
+    mine = _setup_fields(other.get("/totp/setup").text)
+    code = pyotp.TOTP(victim["secret"]).at(frozen_clock.current)
+    form = {"setup_token": victim["setup_token"], "csrf_token": mine["csrf_token"], "code": code}
+    r = other.post("/totp/setup", data=form, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/totp/setup"
+    assert _user(app_client, "mallory").totp_secret_enc is None
+    assert _user(app_client, "victim").totp_secret_enc is None
+
+
+def test_expired_setup_token_rejected(
+    app_client: TestClient, make_user: Any, login: Any, frozen_clock: Any
+) -> None:
+    u = _pending_client(app_client, make_user, login, "late")
+    old = _setup_fields(app_client.get("/totp/setup").text)  # issued at t0
+    frozen_clock.advance(minutes=9)
+    login(u.username, u.password)  # fresh pending session, alive until t0 + 19 min
+    fresh = _setup_fields(app_client.get("/totp/setup").text)
+    frozen_clock.advance(minutes=1, seconds=1)  # old token is now 10 min 01 s old
+    code = pyotp.TOTP(old["secret"]).at(frozen_clock.current)
+    form = {"setup_token": old["setup_token"], "csrf_token": fresh["csrf_token"], "code": code}
+    r = app_client.post("/totp/setup", data=form, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/totp/setup"
+    assert _user(app_client, "late").totp_secret_enc is None
+    # The fresh token (9 min later) is still accepted at the same instant.
+    good = pyotp.TOTP(fresh["secret"]).at(frozen_clock.current)
+    form = {"setup_token": fresh["setup_token"], "csrf_token": fresh["csrf_token"], "code": good}
+    ok = app_client.post("/totp/setup", data=form, follow_redirects=False)
+    assert ok.status_code == 303 and ok.headers["location"] == "/"
+
+
+def test_pending_session_cannot_logout(
+    app_client: TestClient, make_user: Any, login: Any, frozen_clock: Any
+) -> None:
+    _pending_client(app_client, make_user, login, "half")
+    fields = _setup_fields(app_client.get("/totp/setup").text)
+    r = app_client.post("/logout", data={"csrf_token": fields["csrf_token"]})
+    assert r.status_code == 401
+    assert len(_sessions(app_client)) == 1
+
+
+def test_concurrent_enrolment_completion_is_not_a_500(
+    app_client: TestClient,
+    make_user: Any,
+    login: Any,
+    frozen_clock: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Any,
+) -> None:
+    u = _pending_client(app_client, make_user, login, "twice")
+    fields = _setup_fields(app_client.get("/totp/setup").text)
+    real = totp_match_step
+    key = settings.secret_key.get_secret_value()
+
+    def racing(secret: str, code: str, at: Any = None) -> int | None:
+        step = real(secret, code, at)
+        # Simulate the other submit winning between our read and our writes.
+        with app_client.app.state.sessionmaker() as s:  # type: ignore[attr-defined]
+            other = s.get(User, u.id)
+            assert other is not None
+            other.totp_secret_enc = encrypt_totp_secret(secret, key)
+            for row in s.scalars(select(Session)).all():
+                s.delete(row)
+            s.commit()
+        return step
+
+    monkeypatch.setattr(routes, "totp_match_step", racing)
+    code = pyotp.TOTP(fields["secret"]).at(frozen_clock.current)
+    form = {"setup_token": fields["setup_token"], "csrf_token": fields["csrf_token"], "code": code}
+    r = app_client.post("/totp/setup", data=form, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert SESSION_COOKIE not in r.headers.get("set-cookie", "")
+    assert _sessions(app_client) == []

@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import timedelta
 from typing import Annotated, Any
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session as DbSession
 from starlette.responses import Response
 
@@ -23,6 +22,11 @@ from audidash_server.auth.csrf import (
     login_csrf_token,
     set_login_csrf_cookie,
     tokens_equal,
+)
+from audidash_server.auth.lockout import (
+    MAX_FAILED_LOGINS,
+    clear_failures_if_unlocked,
+    record_failure,
 )
 from audidash_server.auth.ratelimit import LoginRateLimiter
 from audidash_server.auth.sessions import (
@@ -52,8 +56,6 @@ from audidash_server.settings import Settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-MAX_FAILED_LOGINS = 5
-LOCKOUT = timedelta(minutes=15)
 SETUP_TOKEN_TTL_SECONDS = 600
 GENERIC_LOGIN_ERROR = "Usuário, senha ou código inválidos."
 RATE_LIMITED_ERROR = "Muitas tentativas de login. Aguarde alguns minutos e tente novamente."
@@ -154,30 +156,32 @@ def login_submit(
             request, error=GENERIC_LOGIN_ERROR, username=username[:64], status_code=401
         )
 
+    def fail_counted(user_id: uuid.UUID | None) -> Response:
+        """Every failure path does the same DB work: one counted UPDATE and a commit."""
+        if record_failure(db, user_id, now):
+            logger.warning("account %s locked after %d failures", user_id, MAX_FAILED_LOGINS)
+        db.commit()
+        return fail()
+
+    now = clock.now()
     user = None
     if len(username) <= 64:
         user = db.scalars(select(User).where(User.username == username)).first()
     if user is None or user.disabled:
         passwords.verify_password(passwords.dummy_hash(), password)  # equalize timing
-        return fail()
+        return fail_counted(None)
 
-    now = clock.now()
     password_ok = passwords.verify_password(user.password_hash, password)
     enrolled = user.totp_secret_enc is not None
     step = _totp_step(request, user, totp) if enrolled else None
     if user.locked_until is not None and user.locked_until > now:
-        return fail()
+        return fail_counted(None)  # attempts while locked are not counted
     if not password_ok or (enrolled and step is None):
-        user.failed_logins += 1
-        if user.failed_logins >= MAX_FAILED_LOGINS:
-            user.locked_until = now + LOCKOUT
-            user.failed_logins = 0
-            logger.warning("account %s locked after %d failures", user.id, MAX_FAILED_LOGINS)
-        db.commit()
-        return fail()
+        return fail_counted(user.id)
 
-    user.failed_logins = 0
-    user.locked_until = None
+    if not clear_failures_if_unlocked(db, user.id, now):
+        db.rollback()  # a concurrent attempt locked the account meanwhile
+        return fail()
     if passwords.needs_rehash(user.password_hash):
         user.password_hash = passwords.hash_password(password)
     if step is not None and not _claim_totp_step(db, user, step):
@@ -223,7 +227,9 @@ def totp_setup_form(request: Request, db: Db) -> Response:
     sess, user = pending
     secret = totp_secret_new()
     payload = json.dumps({"u": str(user.id), "s": secret}).encode("utf-8")
-    setup_token = setup_fernet(_secret_key(request)).encrypt(payload).decode("ascii")
+    issued_at = int(clock.now().timestamp())
+    fernet = setup_fernet(_secret_key(request))
+    setup_token = fernet.encrypt_at_time(payload, issued_at).decode("ascii")
     return _setup_page(request, sess, user, secret, setup_token)
 
 
@@ -245,8 +251,10 @@ def totp_setup_submit(
     if not limiter.hit(client_ip(request) or "unknown"):  # code guesses share the login budget
         return Response(RATE_LIMITED_ERROR, status_code=429)
     try:
-        raw = setup_fernet(_secret_key(request)).decrypt(
-            setup_token.encode("ascii"), ttl=SETUP_TOKEN_TTL_SECONDS
+        raw = setup_fernet(_secret_key(request)).decrypt_at_time(
+            setup_token.encode("ascii"),
+            ttl=SETUP_TOKEN_TTL_SECONDS,
+            current_time=int(clock.now().timestamp()),
         )
         data = json.loads(raw)
         if uuid.UUID(data["u"]) != user.id:
@@ -265,9 +273,22 @@ def totp_setup_submit(
             error="Código inválido. Confira o horário do dispositivo e tente novamente.",
             status_code=400,
         )
-    user.totp_secret_enc = encrypt_totp_secret(secret, _secret_key(request))
-    user.totp_last_step = step
-    db.delete(sess)
+    # Guarded writes: a concurrent double-submit finds 0 rows and is redirected, not a 500.
+    enrolled = db.execute(
+        update(User)
+        .where(User.id == user.id, User.totp_secret_enc.is_(None))
+        .values(
+            totp_secret_enc=encrypt_totp_secret(secret, _secret_key(request)),
+            totp_last_step=step,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    removed = db.execute(
+        delete(Session).where(Session.id == sess.id).execution_options(synchronize_session=False)
+    )
+    if getattr(enrolled, "rowcount", 0) != 1 or getattr(removed, "rowcount", 0) != 1:
+        db.rollback()
+        return _see_other("/")
     token, _ = create_session(db, user, client_ip(request))
     db.commit()
     response = _see_other("/")
@@ -296,8 +317,10 @@ def logout(
 
 
 @router.get("/")
-def home(request: Request, user: Annotated[User, Depends(current_user)]) -> Response:
+def home(
+    request: Request,
+    user: Annotated[User, Depends(current_user)],
+    sess: Annotated[Session, Depends(current_session)],
+) -> Response:
     """Placeholder landing page; the dashboard (Task 8) replaces it."""
-    return render(
-        request, "home.html", {"user": user, "csrf_token": request.state.auth_session.csrf_token}
-    )
+    return render(request, "home.html", {"user": user, "csrf_token": sess.csrf_token})
