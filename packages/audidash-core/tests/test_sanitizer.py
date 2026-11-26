@@ -58,7 +58,7 @@ def test_does_not_redact_ip_or_port() -> None:
     assert redact("10.0.0.5:22") == "10.0.0.5:22"
 
 
-def _finding(**kw: str) -> Finding:
+def _finding(**kw: object) -> Finding:
     base = {
         "id": "SSH-001",
         "title": "t",
@@ -177,3 +177,27 @@ def test_password_rule_fast_on_whitespace() -> None:
     start = time.perf_counter()
     redact("password=" + " " * 1_000_000)
     assert time.perf_counter() - start < 1.0
+
+
+def test_strips_nul_from_every_text_field() -> None:
+    f = sanitize_finding(
+        _finding(
+            title="a\x00b",
+            evidence="\x00e",
+            recommendation="r\x00",
+            references=["https://x\x00.example"],
+            item_key="/etc/\x00k",
+        )
+    )
+    assert "\\u0000" not in f.model_dump_json()
+    assert (f.title, f.evidence, f.recommendation) == ("ab", "e", "r")
+    assert f.references == ["https://x.example"] and f.item_key == "/etc/k"
+
+
+def test_nul_only_title_keeps_a_valid_finding() -> None:
+    f = sanitize_finding(_finding(title="\x00\x00"))
+    assert f.title and "\x00" not in f.title
+
+
+def test_redact_strips_nul() -> None:
+    assert redact("x\x00y") == "xy"

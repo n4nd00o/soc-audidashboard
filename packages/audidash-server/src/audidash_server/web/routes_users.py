@@ -20,6 +20,7 @@ from audidash_server.auth.routes import render
 from audidash_server.auth.sessions import current_session, current_user
 from audidash_server.db import get_session
 from audidash_server.models import Role, Session, User
+from audidash_server.textguard import without_nul
 from audidash_server.web.layout import page_context
 
 router = APIRouter(prefix="/users", dependencies=[require_role(Role.admin), Depends(csrf_protect)])
@@ -106,7 +107,7 @@ async def create(request: Request, db: Db, user: CurrentUser, sess: CurrentSessi
             sess,
             status_code=code,
             error=message,
-            form_username=username[:64],
+            form_username=without_nul(username)[:64],
             form_role=role_raw,
         )
 

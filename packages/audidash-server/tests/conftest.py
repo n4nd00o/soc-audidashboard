@@ -25,7 +25,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import text
+from sqlalchemy import event, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session as DbSession
 
 TEST_PASSWORD = "Corr3ct-Horse-Battery-Staple"  # noqa: S105 - test fixture value
@@ -37,6 +38,34 @@ _CSRF_FIELD = re.compile(r'name="csrf_token" value="([^"]+)"')
 # Alembic migrations, and every test starts by TRUNCATE-ing all tables (RESTART IDENTITY CASCADE).
 # The database must be disposable and used by one pytest process at a time.
 TEST_DATABASE_URL = os.environ.get("AUDIDASH_TEST_DATABASE_URL", "")
+
+
+def _carries_nul(value: object) -> bool:
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_carries_nul(k) or _carries_nul(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_carries_nul(v) for v in value)
+    return False
+
+
+def _reject_nul_parameters(
+    conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
+) -> None:
+    # PostgreSQL text columns cannot hold NUL (psycopg raises DataError); SQLite stores it
+    # silently. Fail the same way on every backend so NUL reaching the DB is caught locally.
+    if _carries_nul(parameters):
+        raise ValueError("PostgreSQL text fields cannot contain NUL (0x00) bytes")
+
+
+@pytest.fixture(autouse=True)
+def _pg_like_nul_guard() -> Iterator[None]:
+    event.listen(Engine, "before_cursor_execute", _reject_nul_parameters)
+    try:
+        yield
+    finally:
+        event.remove(Engine, "before_cursor_execute", _reject_nul_parameters)
 
 
 @pytest.fixture(scope="session")

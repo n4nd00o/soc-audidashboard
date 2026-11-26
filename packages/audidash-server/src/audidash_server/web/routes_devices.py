@@ -19,6 +19,7 @@ from audidash_server.db import get_session
 from audidash_server.models import Device, Role, Session, User
 from audidash_server.services.enrollment import ENROLLMENT_TOKEN_TTL, create_enrollment_token
 from audidash_server.settings import Settings
+from audidash_server.textguard import without_nul
 from audidash_server.web import device_queries as dq
 from audidash_server.web.layout import page_context
 
@@ -88,7 +89,13 @@ async def create_token(
     name = raw.strip() if isinstance(raw, str) else ""
     if not dq.DEVICE_NAME.fullmatch(name):
         return _render_page(
-            request, db, user, sess, status_code=422, error=NAME_MESSAGE, name_value=name[:128]
+            request,
+            db,
+            user,
+            sess,
+            status_code=422,
+            error=NAME_MESSAGE,
+            name_value=without_nul(name)[:128],
         )
     settings: Settings = request.app.state.settings
     default_dashboard, default_api, derived_ok = dq.default_urls(str(request.base_url))

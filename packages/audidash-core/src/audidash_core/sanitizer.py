@@ -7,6 +7,7 @@ from audidash_core.findings import Finding
 MAX_EVIDENCE_CHARS = 2000
 _TRUNCATED_SUFFIX = "…[truncated]"
 _MAX_TITLE_CHARS = 200
+_EMPTY_TITLE = "(untitled)"
 _INPUT_MARGIN = 2
 # Between a secret's key and its value: optional closing quote (JSON), then = or :.
 # Values already redacted are left alone so earlier, more specific tokens survive.
@@ -87,8 +88,17 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+def strip_nul(text: str) -> str:
+    """Drop NUL (0x00): servers storing findings in PostgreSQL text columns reject it."""
+    return text.replace("\x00", "")
+
+
 def redact(text: str) -> str:
-    """Replace secrets and personal data in ``text`` with ``[REDACTED:<kind>]``."""
+    """Replace secrets and personal data in ``text`` with ``[REDACTED:<kind>]``.
+
+    NUL characters are stripped first, so every redacted string is also NUL-free.
+    """
+    text = strip_nul(text)
     for pattern, replacement in _RULES:
         text = pattern.sub(replacement, text)
     return text
@@ -118,11 +128,14 @@ def redact_capped(text: str, limit: int) -> str:
 
 
 def sanitize_finding(f: Finding) -> Finding:
-    """Return a copy of ``f`` with text fields redacted; ``target`` is left intact."""
+    """Return a copy of ``f`` with text fields redacted and NUL-free; ``target`` is left intact."""
+    title = redact(_bounded(f.title, _MAX_TITLE_CHARS))[:_MAX_TITLE_CHARS]
     return f.model_copy(
         update={
-            "title": redact(_bounded(f.title, _MAX_TITLE_CHARS))[:_MAX_TITLE_CHARS],
+            "title": title or _EMPTY_TITLE,  # a NUL-only title must stay a valid Finding
             "evidence": redact_capped(f.evidence, MAX_EVIDENCE_CHARS),
             "recommendation": redact_capped(f.recommendation, MAX_EVIDENCE_CHARS),
+            "references": [strip_nul(r) for r in f.references],
+            "item_key": None if f.item_key is None else strip_nul(f.item_key),
         }
     )
