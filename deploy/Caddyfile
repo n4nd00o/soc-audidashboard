@@ -17,8 +17,9 @@
 	request_header -X-Audidash-Proxy-Secret
 	request_header -X-Client-Cert-Fingerprint
 
-	# The device API is only reachable on the mTLS listener.
-	handle /api/* {
+	# The device API is only reachable on the mTLS listener (bare /api included).
+	@api path /api /api/*
+	handle @api {
 		respond 404
 	}
 

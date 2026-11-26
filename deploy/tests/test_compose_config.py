@@ -100,7 +100,18 @@ def test_backend_network_is_internal(compose: dict[str, Any]) -> None:
 def test_server_waits_for_healthy_db(services: dict[str, dict[str, Any]]) -> None:
     assert services["server"]["depends_on"]["db"]["condition"] == "service_healthy"
     assert services["proxy"]["depends_on"]["server"]["condition"] == "service_healthy"
-    assert "healthcheck" in services["db"]
+    assert services["db"]["healthcheck"]["test"] == [
+        "CMD",
+        "pg_isready",
+        "-h",
+        "127.0.0.1",
+        "-U",
+        "audidash",
+        "-d",
+        "audidash",
+    ]
+    assert services["db"]["environment"]["POSTGRES_USER"] == "audidash"
+    assert services["db"]["environment"]["POSTGRES_DB"] == "audidash"
 
 
 def test_containers_hardened(services: dict[str, dict[str, Any]]) -> None:
@@ -153,6 +164,14 @@ def test_env_example_has_only_placeholders() -> None:
             assert value == "CHANGE_ME", key
 
 
+def test_env_example_requires_url_safe_secrets() -> None:
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "token_urlsafe" in text
+    assert "URL-safe" in text
+    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
+    assert readme.count("URL-safe") >= 2  # PT-BR and EN sections
+
+
 def test_env_example_is_not_ignored() -> None:
     text = (REPO / ".gitignore").read_text(encoding="utf-8")
     assert "!deploy/.env.example" in text.splitlines()
@@ -180,7 +199,9 @@ def test_caddy_dashboard_listener(caddy_sites: dict[str, str]) -> None:
     assert "tls internal" in body
     assert "client_auth" not in body
     assert "{http.request.tls.client.fingerprint}" not in body
-    assert re.search(r"handle /api/\*\s*\{\s*respond 404\s*\}", body)
+    # Both the bare /api path and everything below it are blocked.
+    assert re.search(r"@api path /api /api/\*", body)
+    assert re.search(r"handle @api\s*\{\s*respond 404\s*\}", body)
 
 
 def test_caddy_api_listener_requires_client_cert(caddy_sites: dict[str, str]) -> None:
@@ -211,7 +232,22 @@ def test_entrypoint_is_strict_and_execs() -> None:
     assert "set -eu" in text
     assert "init-ca" in text and "issue-server-cert" in text
     assert re.search(r'^exec "\$@"$', text, re.M)
+    # The API certificate is re-validated on every start, not only when absent.
+    assert "check-server-cert" in text
+    assert "--min-days 30" in text
     assert "\r" not in text
+
+
+def test_ci_smoke_job_checks() -> None:
+    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    job = ci["jobs"]["compose-smoke"]
+    script = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "--wait" in script
+    assert "https://localhost:9443/api/v1/assets" in script
+    assert "checkend 0" in script  # the lab certificate must really be expired
+    # Piped assertions break under `bash -eo pipefail` (SIGPIPE / non-zero producers).
+    for line in script.splitlines():
+        assert "| grep" not in line, line
 
 
 def test_tls_expired_cert_window() -> None:

@@ -14,6 +14,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import segno
+from cryptography import x509
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session as DbSession
@@ -27,6 +28,7 @@ from audidash_server.ca import (
     load_existing_ca,
     load_or_create_ca,
     replace_ca,
+    server_cert_problem,
 )
 from audidash_server.db import init_db, make_engine
 from audidash_server.models import AuditEntry, Role, User
@@ -312,6 +314,27 @@ def issue_server_cert(
     return 0
 
 
+def check_server_cert(*, cert_path: Path, hosts: list[str], min_days: int) -> int:
+    """0 = keep the proxy certificate; 1 = reissue it (reason on stderr); 2 = setup error."""
+    ca_cert_path = Settings().data_dir / "ca" / "ca.crt"
+    try:
+        ca_cert = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
+    except (OSError, ValueError):
+        return _fail("CA not initialised — run init-ca")
+    try:
+        cert_pem = cert_path.read_bytes()
+    except OSError:
+        return _fail(f"{cert_path}: certificado ausente", 1)
+    try:
+        problem = server_cert_problem(cert_pem, ca_cert, hosts, min_days)
+    except ValueError as exc:
+        return _fail(str(exc))
+    if problem:
+        return _fail(f"{cert_path}: {problem}", 1)
+    print(f"{cert_path}: OK")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="audidash-server", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -336,6 +359,12 @@ def build_parser() -> argparse.ArgumentParser:
     cert_cmd.add_argument("--out-key", type=Path, required=True)
     cert_cmd.add_argument("--days", type=int, default=SERVER_CERT_DEFAULT_DAYS)
     cert_cmd.add_argument("--force", action="store_true", help="overwrite existing outputs")
+    check_cmd = sub.add_parser(
+        "check-server-cert", help="exit 0 if the proxy certificate is still good, 1 to reissue"
+    )
+    check_cmd.add_argument("--cert", type=Path, required=True)
+    check_cmd.add_argument("--host", action="append", required=True, dest="hosts")
+    check_cmd.add_argument("--min-days", type=int, default=30)
     return parser
 
 
@@ -361,6 +390,8 @@ def main(argv: list[str] | None = None) -> int:
             days=args.days,
             force=args.force,
         )
+    if args.command == "check-server-cert":
+        return check_server_cert(cert_path=args.cert, hosts=args.hosts, min_days=args.min_days)
     return 2  # pragma: no cover - argparse enforces the choices
 
 
