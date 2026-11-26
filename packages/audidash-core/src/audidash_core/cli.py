@@ -9,6 +9,7 @@ from typing import TextIO
 import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from audidash_core import cli_server
 from audidash_core.catalog import CatalogEntry, Trust, load_catalog, load_public_key
 from audidash_core.cli_format import (
     TROJAN_SOURCE_WARNING,
@@ -312,6 +313,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         allowed = ", ".join(t.value for t in manifest.targets)
         raise UsageError(f"plugin {manifest.id} supports target types: {allowed}")
     params = _parse_params(manifest, args.param)
+    plan = cli_server.prepare_upload(args)  # validates --upload/--asset before anything runs
     info = sys.stderr if args.json else sys.stdout
     _err(ETHICAL_NOTICE)
     files: dict[str, bytes] = {}
@@ -329,7 +331,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _err("aborted: plugin was not run")
         return EXIT_USAGE
     run_input = RunInput(
-        target=args.target, target_type=target_type, parameters=params, credentials={}
+        target=plan.target if plan else args.target,
+        target_type=target_type,
+        parameters=params,
+        credentials={},
     )
     # Pin what was reviewed: the runner blocks if plugin.yaml or any hashed file changed since.
     result = run_local(
@@ -342,7 +347,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(result.model_dump_json())
     else:
         _report(result, Criticality(args.criticality))
-    return EXIT_OK if result.status is RunStatus.ok else EXIT_FAILED
+    if result.status is not RunStatus.ok:
+        if plan:
+            _err("not uploaded: the run did not finish ok")
+        return EXIT_FAILED
+    if plan and cli_server.upload_result(plan, result, json_mode=args.json):
+        return EXIT_FAILED
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------- parser
@@ -391,7 +402,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--criticality", choices=[c.value for c in Criticality], default="medium")
     run.add_argument("--json", action="store_true", help="print the RunResult JSON only")
     run.add_argument("--yes", action="store_true", help="skip the community-plugin confirmation")
+    cli_server.add_upload_args(run)
     run.set_defaults(func=_cmd_run)
+    cli_server.register(sub)
     return parser
 
 
@@ -409,6 +422,9 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError as exc:
         _err(f"error: {exc}")
         return EXIT_USAGE
+    except cli_server.ServerCliError as exc:
+        _err(f"error: {exc}")
+        return EXIT_USAGE if exc.usage else EXIT_FAILED
 
 
 if __name__ == "__main__":  # pragma: no cover
