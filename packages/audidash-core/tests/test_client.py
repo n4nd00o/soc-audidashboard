@@ -26,8 +26,8 @@ import pyotp
 import pytest
 from audidash_core import cli_server
 from audidash_core.cli import main
+from audidash_core.client import api, identity
 from audidash_core.client import config as client_config
-from audidash_core.client import identity
 from audidash_core.client.api import ApiClient, ApiError
 from audidash_core.client.config import ClientConfig, ClientError
 from audidash_core.manifest import TargetType
@@ -63,8 +63,13 @@ class ProxyTransport(httpx.BaseTransport):
         self.secret = secret
         self.config_dir = config_dir
         self.fail_runs: tuple[int, str] | None = None
+        self.requests: list[tuple[str, str]] = []
+        self.ca_pem_override: bytes | None = None
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append((request.method, request.url.path))
+        if self.ca_pem_override is not None and request.url.path == "/ca.pem":
+            return httpx.Response(200, content=self.ca_pem_override, request=request)
         if self.fail_runs and request.url.path == "/api/v1/runs":
             status, detail = self.fail_runs
             return httpx.Response(status, json={"detail": detail}, request=request)
@@ -224,6 +229,32 @@ def test_enroll_ca_fingerprint_mismatch_writes_nothing(
     assert _files(env.config_dir) == []
 
 
+def test_enroll_checks_the_ca_before_sending_the_token(env: Env) -> None:
+    assert main(env.enroll_args("--ca-fingerprint", "ab" * 32)) == 1
+    assert env.transport.requests == [("GET", "/ca.pem")]  # the token never left
+    env.transport.requests.clear()
+    assert main(env.enroll_args("--ca-fingerprint", env.ca_fingerprint())) == 0
+    assert env.transport.requests[:2] == [("GET", "/ca.pem"), ("POST", "/enroll")]
+
+
+def test_enroll_refuses_garbage_ca_download(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
+    env.transport.ca_pem_override = b"not a certificate"
+    assert main(env.enroll_args("--ca-fingerprint", env.ca_fingerprint())) == 1
+    assert "CA certificate" in capsys.readouterr().err
+    assert ("POST", "/enroll") not in env.transport.requests
+
+
+def test_enroll_refuses_enroll_response_with_another_ca(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _key, other = _make_ca("attacker CA")
+    env.transport.ca_pem_override = _pem(other)
+    fp = identity.cert_fingerprint(_pem(other))
+    assert main(env.enroll_args("--ca-fingerprint", fp)) == 1
+    assert "different CA" in capsys.readouterr().err
+    assert _files(env.config_dir) == []
+
+
 def test_enroll_accepts_colon_separated_uppercase_fingerprint(env: Env) -> None:
     fp = env.ca_fingerprint().upper()
     pretty = ":".join(fp[i : i + 2] for i in range(0, 64, 2))
@@ -239,11 +270,36 @@ def test_enroll_requires_fingerprint_or_explicit_insecure_flag(
 
 
 def test_enroll_insecure_first_contact_warns_loudly(
-    env: Env, capsys: pytest.CaptureFixture[str]
+    env: Env, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("builtins.input", _inputs("y"))
     assert main(env.enroll_args("--insecure-first-contact")) == 0
     err = capsys.readouterr().err
     assert "WARNING" in err and "not verified" in err
+    assert env.ca_fingerprint() in err  # shown BEFORE the confirmation
+
+
+@pytest.mark.parametrize("answer", ["", "n", "no", "nope"])
+def test_enroll_insecure_first_contact_declined_sends_nothing(
+    env: Env, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    monkeypatch.setattr("builtins.input", _inputs(answer))
+    assert main(env.enroll_args("--insecure-first-contact")) == 1
+    assert "aborted" in capsys.readouterr().err
+    assert ("POST", "/enroll") not in env.transport.requests
+    assert _files(env.config_dir) == []
+
+
+@pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
+def test_enroll_insecure_first_contact_eof_or_ctrl_c_sends_nothing(
+    env: Env, monkeypatch: pytest.MonkeyPatch, error: type[BaseException]
+) -> None:
+    def _raise(_prompt: str = "") -> str:
+        raise error
+
+    monkeypatch.setattr("builtins.input", _raise)
+    assert main(env.enroll_args("--insecure-first-contact")) == 1
+    assert ("POST", "/enroll") not in env.transport.requests
 
 
 def test_enroll_rejects_malformed_fingerprint_and_plain_http(env: Env) -> None:
@@ -594,6 +650,103 @@ def test_server_not_signed_by_pinned_ca_is_refused(tls_server: TlsFixture) -> No
     config = tls_server.config(tls_server.other_ca)
     with pytest.raises(ClientError, match="pinned CA"):
         ApiClient(config, access_token="t").assets()  # noqa: S106
+
+
+class _EnrollHandler(BaseHTTPRequestHandler):
+    """Dashboard listener stand-in: server TLS only, serves /ca.pem and records /enroll."""
+
+    ca_pem: bytes = b""
+    posted: list[bytes] = []  # noqa: RUF012 - replaced per fixture
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib hook name
+        self._send(200, self.ca_pem, "application/x-pem-file")
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib hook name
+        length = int(self.headers.get("Content-Length", "0"))
+        type(self).posted.append(self.rfile.read(length))
+        body = {"device_id": "d-1", "cert_pem": "c", "ca_pem": self.ca_pem.decode()}
+        self._send(201, json.dumps(body).encode(), "application/json")
+
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        pass
+
+
+@dataclass
+class EnrollTls:
+    port: int
+    ca_pem: str
+    other_ca_pem: str
+    posted: list[bytes]
+
+
+@pytest.fixture
+def enroll_tls(tmp_path: Path) -> Iterator[EnrollTls]:
+    ca_key, ca_cert = _make_ca("AudiDashboard CA")
+    _other_key, other_cert = _make_ca("other CA")
+    server_key, server_cert = _issue(ca_key, ca_cert, "localhost", server=True)
+    cert_file, key_file = tmp_path / "d.crt", tmp_path / "d.key"
+    cert_file.write_bytes(_pem(server_cert))
+    key_file.write_bytes(_key_pem(server_key))
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_file, key_file)
+    handler: type[_EnrollHandler] = type(
+        "Handler", (_EnrollHandler,), {"ca_pem": _pem(ca_cert), "posted": []}
+    )
+    httpd = HTTPServer(("127.0.0.1", 0), handler)
+    httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield EnrollTls(
+            httpd.server_address[1],
+            _pem(ca_cert).decode(),
+            _pem(other_cert).decode(),
+            handler.posted,
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def _enroll_call(url: str, ca_pem: str | None) -> api.EnrollResult:
+    token = "secret-token"  # noqa: S105 - test fixture value
+    return api.enroll_device(url, token=token, device_name="pc", csr_pem="csr", ca_pem=ca_pem)
+
+
+def test_fetch_ca_pem_downloads_without_trusting_anything(enroll_tls: EnrollTls) -> None:
+    assert api.fetch_ca_pem(f"https://localhost:{enroll_tls.port}") == enroll_tls.ca_pem
+
+
+def test_enroll_is_verified_against_the_fetched_ca(enroll_tls: EnrollTls) -> None:
+    result = _enroll_call(f"https://localhost:{enroll_tls.port}", enroll_tls.ca_pem)
+    assert result.device_id == "d-1"
+    assert len(enroll_tls.posted) == 1 and b"secret-token" in enroll_tls.posted[0]
+
+
+def test_enroll_to_a_server_of_another_ca_never_sends_the_token(enroll_tls: EnrollTls) -> None:
+    with pytest.raises(ApiError, match="TLS verification failed"):
+        _enroll_call(f"https://localhost:{enroll_tls.port}", enroll_tls.other_ca_pem)
+    assert enroll_tls.posted == []
+
+
+def test_enroll_checks_the_hostname(enroll_tls: EnrollTls) -> None:
+    # The certificate names only "localhost": an IP-literal URL must not verify.
+    with pytest.raises(ApiError, match="TLS"):
+        _enroll_call(f"https://127.0.0.1:{enroll_tls.port}", enroll_tls.ca_pem)
+    assert enroll_tls.posted == []
+
+
+def test_enroll_ssl_context_trusts_only_the_given_ca(enroll_tls: EnrollTls) -> None:
+    context = api.enroll_ssl_context(enroll_tls.ca_pem)
+    assert context.check_hostname and context.verify_mode is ssl.CERT_REQUIRED
+    assert len(context.get_ca_certs()) == 1
 
 
 # ------------------------------------------------------------------ identity helpers

@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from cryptography import x509
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from audidash_core.client.config import ClientConfig, ClientError, SessionExpiredError
@@ -91,6 +92,10 @@ def _connection_error(exc: httpx.HTTPError, url: str) -> ApiError:
     cause: BaseException | None = exc
     while cause is not None:
         if isinstance(cause, ssl.SSLCertVerificationError):
+            if "hostname" in (cause.verify_message or ""):
+                return ApiError(
+                    f"TLS verification failed for {host}: certificate not valid for this host"
+                )
             return ApiError(f"TLS verification failed for {host}: not signed by the pinned CA")
         if isinstance(cause, ssl.SSLError):
             return ApiError(f"TLS error talking to {host}: {cause.reason or 'handshake failed'}")
@@ -105,24 +110,67 @@ def _call(client: httpx.Client, method: str, url: str, **kwargs: Any) -> httpx.R
         raise _connection_error(exc, url) from None
 
 
+MAX_CA_PEM_BYTES = 16 * 1024
+
+
+def enroll_ssl_context(ca_pem: str) -> ssl.SSLContext:
+    """Trust only ``ca_pem`` (no system roots), with hostname checking, for ``/enroll``."""
+    try:
+        context = ssl.create_default_context(cadata=ca_pem)
+    except (ssl.SSLError, ValueError) as exc:
+        raise ApiError(f"unusable CA certificate: {exc}") from None
+    context.check_hostname = True
+    context.verify_mode = ssl.CERT_REQUIRED
+    return context
+
+
+def fetch_ca_pem(dashboard_url: str, *, transport: httpx.BaseTransport | None = None) -> str:
+    """GET /ca.pem WITHOUT TLS verification: the CA certificate is public and not secret.
+
+    Nothing secret is sent. The caller MUST compare the certificate's SHA-256 with an
+    out-of-band fingerprint (or have the user confirm it) before trusting it.
+    """
+    with httpx.Client(
+        transport=transport,
+        verify=False,  # noqa: S501  # nosec B501 - public, non-secret, checked by fingerprint
+        timeout=TIMEOUT,
+        trust_env=False,
+        follow_redirects=False,
+    ) as client:
+        response = _call(client, "GET", dashboard_url.rstrip("/") + "/ca.pem")
+    if response.status_code != 200:
+        raise ApiError(f"cannot download the CA certificate: HTTP {response.status_code}")
+    if len(response.content) > MAX_CA_PEM_BYTES:
+        raise ApiError("cannot download the CA certificate: response too large")
+    try:
+        ca_pem = response.content.decode("ascii")
+        x509.load_pem_x509_certificate(response.content)
+    except ValueError:
+        raise ApiError("the server did not return a valid CA certificate") from None
+    return ca_pem
+
+
 def enroll_device(
     dashboard_url: str,
     *,
     token: str,
     device_name: str,
     csr_pem: str,
-    verify_tls: bool,
+    ca_pem: str | None,
     transport: httpx.BaseTransport | None = None,
 ) -> EnrollResult:
     """POST /enroll on the dashboard listener (server-TLS only, no client certificate yet).
 
-    `verify_tls=False` is the trust-on-first-use path: the caller MUST then check the returned
-    CA certificate against an out-of-band fingerprint before trusting anything.
+    With ``ca_pem`` the TLS connection is verified against that CA alone (hostname included),
+    so the single-use token is only ever sent to a server holding a certificate of the
+    already-checked CA. ``ca_pem=None`` is the explicit ``--insecure-first-contact`` path
+    (unverified TLS); the caller then checks the returned CA before trusting anything.
     """
     body = {"token": token, "device_name": device_name, "csr_pem": csr_pem}
+    verify: ssl.SSLContext | bool = enroll_ssl_context(ca_pem) if ca_pem is not None else False
     with httpx.Client(
         transport=transport,
-        verify=verify_tls,
+        verify=verify,
         timeout=TIMEOUT,
         trust_env=False,
         follow_redirects=False,

@@ -125,20 +125,42 @@ jobs:
       - name: Build and start the stack
         run: docker compose up -d --build --wait --wait-timeout 300
 
-      - name: Dashboard listener serves /healthz
-        run: curl -fsSk --retry 10 --retry-all-errors --retry-delay 2 https://localhost:8443/healthz
+      - name: Copy the internal CA certificate out of the stack
+        run: docker compose cp server:/data/proxy/ca.crt "$RUNNER_TEMP/ca.crt"
+
+      - name: Dashboard listener serves /healthz over TLS verified by the internal CA
+        run: |
+          curl -fsS --cacert "$RUNNER_TEMP/ca.crt" --retry 10 --retry-all-errors \
+            --retry-delay 2 https://localhost:8443/healthz
+
+      - name: Dashboard listener certificate chains to the internal CA (with and without SNI)
+        run: |
+          out=$(openssl s_client -connect localhost:8443 -servername localhost \
+            -CAfile "$RUNNER_TEMP/ca.crt" -verify_hostname localhost </dev/null 2>/dev/null || true)
+          grep -q "Verify return code: 0 (ok)" <<<"$out"
+          # IP literal, no SNI: Caddy's default_sni still selects the internal-CA certificate.
+          out=$(openssl s_client -connect 127.0.0.1:8443 -noservername \
+            -CAfile "$RUNNER_TEMP/ca.crt" -verify_ip 127.0.0.1 </dev/null 2>/dev/null || true)
+          grep -q "Verify return code: 0 (ok)" <<<"$out"
+
+      - name: CA download matches the certificate the dashboard listener chains to
+        run: |
+          curl -fsS --cacert "$RUNNER_TEMP/ca.crt" -o "$RUNNER_TEMP/served-ca.pem" \
+            https://localhost:8443/ca.pem
+          cmp "$RUNNER_TEMP/ca.crt" "$RUNNER_TEMP/served-ca.pem"
 
       - name: Device API is not reachable on the dashboard listener
         run: |
           for path in /api /api/ /api/v1/assets /API/v1/assets; do
-            code=$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:8443$path")
+            code=$(curl -s --cacert "$RUNNER_TEMP/ca.crt" -o /dev/null -w '%{http_code}' \
+              "https://localhost:8443$path")
             test "$code" = "404" || { echo "$path: expected 404, got $code"; exit 1; }
           done
 
       - name: API listener rejects clients without a certificate (TLS handshake)
         run: |
           set +e
-          curl -sSk -o /dev/null https://localhost:9443/api/v1/assets
+          curl -sS --cacert "$RUNNER_TEMP/ca.crt" -o /dev/null https://localhost:9443/api/v1/assets
           rc=$?
           set -e
           echo "curl exit code: $rc"
@@ -147,7 +169,6 @@ jobs:
 
       - name: API listener certificate chains to the internal CA with a localhost SAN
         run: |
-          docker compose cp server:/data/proxy/ca.crt "$RUNNER_TEMP/ca.crt"
           # Capture first: s_client exits non-zero after the certificate_required alert.
           out=$(openssl s_client -connect localhost:9443 -servername localhost \
             -CAfile "$RUNNER_TEMP/ca.crt" -verify_hostname localhost </dev/null 2>/dev/null || true)
