@@ -112,11 +112,14 @@ def cmd_enroll(args: argparse.Namespace) -> int:
             f"this device is already enrolled ({directory}); use --force to replace the identity"
         )
 
+    token = args.token or getpass.getpass("Enrolment token: ").strip()
+    if not token:
+        raise ServerCliError("an enrolment token is required", usage=True)
     key = identity.generate_key()
     try:
         result = enroll_device(
             dashboard,
-            token=args.token,
+            token=token,
             device_name=args.name,
             csr_pem=identity.build_csr(key, args.name).decode("ascii"),
             verify_tls=False,  # TOFU: the returned CA is checked below, before saving anything
@@ -242,7 +245,11 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     )
     enroll.add_argument("--server", required=True, help="dashboard URL, e.g. https://host:8443")
     enroll.add_argument("--api", required=True, help="mTLS API URL, e.g. https://host:9443")
-    enroll.add_argument("--token", required=True, help="single-use enrolment token")
+    enroll.add_argument(
+        "--token",
+        help="single-use enrolment token; write --token=VALUE (tokens can start with '-'); "
+        "omit to be prompted",
+    )
     enroll.add_argument("--name", required=True, help="device name")
     enroll.add_argument("--ca-fingerprint", metavar="SHA256", help="expected CA SHA-256 (hex)")
     enroll.add_argument(

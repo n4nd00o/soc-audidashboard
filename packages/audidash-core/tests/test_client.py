@@ -132,8 +132,7 @@ class Env:
             SERVER,
             "--api",
             API,
-            "--token",
-            token or self.new_token(),
+            f"--token={token or self.new_token()}",  # '=' form: urlsafe tokens may start with '-'
             "--name",
             "my laptop",
             *extra,
@@ -605,3 +604,15 @@ def test_csr_has_no_extensions_and_sanitized_subject() -> None:
     assert csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "bad_name_rm -rf _"
     assert identity.sanitize_device_name("\n") == "_"
     assert identity.sanitize_device_name("   ") == "device"
+
+
+def test_enroll_token_starting_with_dash_parses(env: Env) -> None:
+    """Regression: secrets.token_urlsafe can start with '-', which argparse reads as an option."""
+    fp = env.ca_fingerprint()
+    assert main(env.enroll_args("--ca-fingerprint", fp, token="-dash-token")) == 1  # noqa: S106
+
+
+def test_enroll_prompts_for_missing_token(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt="": env.new_token())
+    args = env.enroll_args("--ca-fingerprint", env.ca_fingerprint())
+    assert main([a for a in args if not a.startswith("--token")]) == 0
