@@ -521,3 +521,48 @@ def test_stale_auto_resolve_does_not_overwrite_accepted_risk(
             if e.to_status is FindingStatus.auto_resolved
         ]
     assert to_auto == []
+
+
+def test_list_orders_by_severity_rank_not_alphabetically(
+    app_client: TestClient, analyst: str
+) -> None:
+    a = _asset(app_client)
+    # Newest last_seen on the lowest severity, so neither recency nor name order can pass.
+    for i, sev in enumerate(
+        [Severity.critical, Severity.high, Severity.medium, Severity.low, Severity.info]
+    ):
+        _finding(
+            app_client, a, title=f"RANK-{sev.value}-x", severity=sev,
+            last_seen=NOW - timedelta(days=10 - i),
+        )  # fmt: skip
+    body = app_client.get("/findings").text
+    assert re.findall(r"RANK-(\w+)-x", body) == ["critical", "high", "medium", "low", "info"]
+
+
+def test_detail_reference_edge_cases(app_client: TestClient, analyst: str) -> None:
+    fid = _finding(
+        app_client,
+        _asset(app_client),
+        references=[
+            " javascript:x",
+            "java	script:x",
+            "//evil.example/x",
+            "HTTP://ok.example/x",
+            "data:text/html,x",
+        ],
+    )
+    body = app_client.get(f"/findings/{fid}").text
+    assert 'href="HTTP://ok.example/x"' in body
+    assert body.count('rel="noopener noreferrer"') == 1
+    for bad in ("javascript:", "java	script", "//evil", "data:"):
+        assert f'href="{bad}' not in body and f'href=" {bad}' not in body
+
+
+def test_list_page_clamping(app_client: TestClient, analyst: str) -> None:
+    a = _asset(app_client)
+    for i in range(51):
+        _finding(app_client, a, title=f"P-{i:02d}-x")
+    assert "página 1 de 2" in app_client.get("/findings?page=-5").text
+    assert "página 2 de 2" in app_client.get("/findings?page=999999").text
+    assert "página 1 de 2" in app_client.get("/findings?page=abc").text
+    assert "página 1 de 2" in app_client.get("/findings?page=0").text

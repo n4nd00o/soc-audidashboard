@@ -60,12 +60,12 @@ def _is_history_restore(request: Request) -> bool:
 
 
 def _clean_justification(raw: str) -> str | None:
-    """Trimmed text of 1..1000 chars; newlines/tabs allowed, other control chars rejected."""
+    """Trimmed text of 1..1000 chars; LF and tab allowed, other control/format/separators not."""
     text = raw.replace("\r\n", "\n").strip()
     if not 0 < len(text) <= MAX_JUSTIFICATION:
         return None
     for ch in text:
-        if ch not in "\n\t" and unicodedata.category(ch) in ("Cc", "Cs"):
+        if ch not in "\n\t" and unicodedata.category(ch) in ("Cc", "Cs", "Cf", "Zl", "Zp"):
             return None
     return text
 
