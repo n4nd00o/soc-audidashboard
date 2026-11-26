@@ -1,0 +1,19 @@
+<label for="asset-name">Nome</label>
+<input id="asset-name" name="name" type="text" value="{{ values.name }}" maxlength="128" required>
+{% if errors.name %}<p class="error" role="alert">{{ errors.name }}</p>{% endif %}
+<label for="asset-address">Endereço</label>
+<input id="asset-address" name="address" type="text" value="{{ values.address }}" maxlength="255">
+{% if errors.address %}<p class="error" role="alert">{{ errors.address }}</p>{% endif %}
+<label for="asset-type">Tipo</label>
+<select id="asset-type" name="asset_type" required>
+  {% for t in asset_types %}<option value="{{ t }}"{% if values.asset_type == t %} selected{% endif %}>{{ t }}</option>{% endfor %}
+</select>
+{% if errors.asset_type %}<p class="error" role="alert">{{ errors.asset_type }}</p>{% endif %}
+<label for="asset-criticality">Criticidade</label>
+<select id="asset-criticality" name="criticality" required>
+  {% for c in criticalities %}<option value="{{ c.value }}"{% if values.criticality == c.value %} selected{% endif %}>{{ criticality_labels[c] }}</option>{% endfor %}
+</select>
+{% if errors.criticality %}<p class="error" role="alert">{{ errors.criticality }}</p>{% endif %}
+<label for="asset-tags">Tags (separadas por vírgula)</label>
+<input id="asset-tags" name="tags" type="text" value="{{ values.tags }}">
+{% if errors.tags %}<p class="error" role="alert">{{ errors.tags }}</p>{% endif %}

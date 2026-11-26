@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{% if asset %}Editar ativo{% else %}Novo ativo{% endif %} · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{% if asset %}Editar ativo{% else %}Novo ativo{% endif %}</h1>
+  <form class="asset-form" method="post" action="{% if asset %}/assets/{{ asset.id }}{% else %}/assets{% endif %}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% include "assets/_fields.html" %}
+    <div class="form-actions">
+      <button type="submit">{% if asset %}Salvar{% else %}Criar ativo{% endif %}</button>
+      <a href="/assets">Cancelar</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

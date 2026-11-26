@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Ativos · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="page-head">
+    <h1>Ativos</h1>
+    {% if can_write %}<a class="button" href="/assets/new" hx-get="/assets/new" hx-target="#asset-form-slot" hx-swap="innerHTML">Novo ativo</a>{% endif %}
+  </div>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <div id="asset-form-slot"></div>
+  {% if rows %}
+  <table class="data assets">
+    <thead>
+      <tr>
+        <th scope="col">Nome</th><th scope="col">Endereço</th><th scope="col">Tipo</th>
+        <th scope="col">Criticidade</th><th scope="col">Pontuação</th><th scope="col">Nível</th>
+        <th scope="col">Abertos</th><th scope="col">Tags</th>
+        {% if can_write %}<th scope="col">Ações</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}{% include "assets/_row.html" %}{% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">Nenhum ativo cadastrado.</p>
+  {% endif %}
+</section>
+{% endblock %}

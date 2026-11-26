@@ -1,0 +1,9 @@
+<form class="asset-form card" method="post" action="/assets" hx-post="/assets" hx-target="#asset-form-slot" hx-swap="innerHTML">
+  <h2>Novo ativo</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% include "assets/_fields.html" %}
+  <div class="form-actions">
+    <button type="submit">Criar ativo</button>
+    <a href="/assets">Cancelar</a>
+  </div>
+</form>
