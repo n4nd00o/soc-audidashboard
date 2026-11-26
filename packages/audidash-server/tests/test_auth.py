@@ -129,7 +129,8 @@ def test_totp_verify_window(frozen_clock: Any) -> None:
 def test_login_page_has_no_inline_script_or_style(app_client: TestClient) -> None:
     page = app_client.get("/login")
     assert page.status_code == 200
-    assert "<script" not in page.text and "style=" not in page.text and "<style" not in page.text
+    assert not re.search(r"<script(?![^>]*\bsrc=)", page.text)  # external scripts only
+    assert "style=" not in page.text and "<style" not in page.text
     assert 'lang="pt-BR"' in page.text
 
 
@@ -345,7 +346,7 @@ def test_first_login_requires_totp_setup(
     page = app_client.get("/totp/setup")
     assert page.status_code == 200
     assert 'src="data:image/svg+xml;base64,' in page.text
-    assert "<script" not in page.text and "style=" not in page.text
+    assert not re.search(r"<script(?![^>]*\bsrc=)", page.text) and "style=" not in page.text
     secret = re.search(r'<code class="totp-secret">([A-Z2-7]+)</code>', page.text)
     assert secret
     setup = re.search(r'name="setup_token" value="([^"]+)"', page.text)

@@ -1,0 +1,13 @@
+<div class="gauge-wrap">
+  <svg class="gauge band-{{ ov.band.value }}" viewBox="0 0 200 115" role="img" aria-labelledby="gauge-title gauge-desc">
+    <title id="gauge-title">Pontuação global de risco</title>
+    <desc id="gauge-desc">{{ "%.2f"|format(ov.global_score) }} de 100, nível {{ band_labels[ov.band] }}.</desc>
+    <path class="gauge-track" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke-width="16" stroke-linecap="round"/>
+    {% if ov.gauge_path %}<path class="gauge-fill" d="{{ ov.gauge_path }}" fill="none" stroke-width="16" stroke-linecap="round"/>{% endif %}
+    <text class="gauge-text" x="100" y="96" text-anchor="middle" aria-hidden="true">{{ "%.0f"|format(ov.global_score) }}</text>
+  </svg>
+  <div class="gauge-legend">
+    <p class="gauge-number"><span id="global-score">{{ "%.2f"|format(ov.global_score) }}</span> / 100</p>
+    <p class="band-badge band-{{ ov.band.value }}">Nível: {{ band_labels[ov.band] }}</p>
+  </div>
+</div>

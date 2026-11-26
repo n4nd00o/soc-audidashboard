@@ -1,0 +1,17 @@
+{% if ov.suspicious %}
+<table class="data">
+  <thead><tr><th scope="col">Achado</th><th scope="col">Ativo</th><th scope="col">Severidade</th><th scope="col">Visto pela 1ª vez</th></tr></thead>
+  <tbody>
+    {% for s in ov.suspicious %}
+    <tr>
+      <td>{{ s.title }}</td>
+      <td>{{ s.asset_name }}</td>
+      <td><span class="sev-tag sev-{{ s.severity.value }}">{{ severity_labels[s.severity] }}</span></td>
+      <td><time datetime="{{ s.first_seen.isoformat() }}">{{ s.first_seen.strftime("%d/%m/%Y") }}</time></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="hint">Nenhuma atividade suspeita em aberto.</p>
+{% endif %}

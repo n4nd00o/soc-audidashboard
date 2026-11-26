@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Visão geral · SOC AudiDashboard{% endblock %}
+{% block content %}
+<h1>Visão geral</h1>
+<div class="grid overview-top">
+  <section class="card" aria-labelledby="score-h">
+    <h2 id="score-h">Pontuação global</h2>
+    {% include "partials/_score_gauge.html" %}
+  </section>
+  <section class="card" aria-labelledby="sev-h">
+    <h2 id="sev-h">Achados ativos por severidade</h2>
+    {% include "partials/_severity_cards.html" %}
+    <p class="hint">
+      {{ ov.counted_total }} achado(s) em aberto ou reconhecido(s).
+      {% if ov.stale_count %}<strong class="stale">{{ ov.stale_count }} sem ser visto há mais de 90 dias</strong> (continuam contando).{% else %}Nenhum desatualizado (&gt; 90 dias).{% endif %}
+    </p>
+  </section>
+</div>
+<section class="card" aria-labelledby="trend-h">
+  <h2 id="trend-h">Tendência (30 dias)</h2>
+  {% include "partials/_trend.html" %}
+</section>
+<div class="grid">
+  <section class="card" aria-labelledby="susp-h">
+    <h2 id="susp-h">Atividade suspeita recente</h2>
+    {% include "partials/_suspicious.html" %}
+  </section>
+  <section class="card" aria-labelledby="top-h">
+    <h2 id="top-h">Ativos com maior pontuação</h2>
+    {% include "partials/_top_assets.html" %}
+  </section>
+</div>
+{% endblock %}

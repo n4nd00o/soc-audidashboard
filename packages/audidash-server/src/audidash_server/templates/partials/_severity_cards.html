@@ -1,0 +1,8 @@
+<ul class="sev-cards">
+  {% for sev, n in ov.severity_counts %}
+  <li class="sev-card sev-{{ sev.value }}">
+    <span class="sev-count">{{ n }}</span>
+    <span class="sev-label">{{ severity_labels[sev] }}</span>
+  </li>
+  {% endfor %}
+</ul>
