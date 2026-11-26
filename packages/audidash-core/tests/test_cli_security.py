@@ -221,7 +221,9 @@ def test_trusted_run_also_shows_summary(
 ) -> None:
     make_plugin(tmp_path, permissions=["reads nothing"])
 
-    def as_verified(plugins_dir: Path, public_key: object) -> list[CatalogEntry]:
+    def as_verified(
+        plugins_dir: Path, public_key: object, verified_hashes: object = ()
+    ) -> list[CatalogEntry]:
         return [replace(e, trust=Trust.verified) for e in load_catalog(plugins_dir, None)]
 
     monkeypatch.setattr(cli, "load_catalog", as_verified)

@@ -81,3 +81,27 @@ def test_dev_mode_env_spellings_fill_secrets(monkeypatch: pytest.MonkeyPatch, fl
     assert s.dev_mode is True
     for secret in (s.secret_key, s.proxy_secret, s.ca_passphrase):
         assert len(secret.get_secret_value()) >= 32
+
+
+def test_public_urls_default_empty_and_accept_https(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(dev_mode=True).public_dashboard_url == ""
+    monkeypatch.setenv("AUDIDASH_PUBLIC_DASHBOARD_URL", "https://soc.example.org:8443/")
+    monkeypatch.setenv("AUDIDASH_PUBLIC_API_URL", "https://soc.example.org:9443")
+    configured = Settings(dev_mode=True)
+    assert configured.public_dashboard_url == "https://soc.example.org:8443"
+    assert configured.public_api_url == "https://soc.example.org:9443"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://soc.example.org",
+        "https://user:pw@soc.example.org",
+        "https://soc.example.org/?x=1",
+        "https://soc.example.org/ x",
+        "soc.example.org",
+    ],
+)
+def test_public_urls_reject_unsafe_values(bad: str) -> None:
+    with pytest.raises(ValueError, match="https"):
+        Settings(dev_mode=True, public_api_url=bad)

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Dispositivos · SOC AudiDashboard{% endblock %}
+{% block content %}
+{% if is_admin %}
+<section class="card">
+  <div class="page-head"><h1>Dispositivos</h1></div>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if new_command %}
+  <div role="status">
+    <h2>Token de inscrição criado</h2>
+    <p class="hint">O token é exibido <strong>uma única vez</strong>, vale por 24 horas e só pode ser usado uma vez. Copie o comando abaixo e execute-o no dispositivo.</p>
+    <pre class="evidence" id="enroll-command">{{ new_command }}</pre>
+  </div>
+  {% endif %}
+  <form class="asset-form" method="post" action="/devices/tokens">
+    <h2>Novo token de inscrição</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="device-name">Nome do dispositivo</label>
+    <input id="device-name" name="name" type="text" value="{{ name_value }}" maxlength="128" required>
+    <div class="form-actions"><button type="submit">Gerar token</button></div>
+  </form>
+</section>
+{% else %}
+<section class="card"><div class="page-head"><h1>Dispositivos</h1></div></section>
+{% endif %}
+<section class="card">
+  <div class="page-head"><h2>Dispositivos inscritos</h2></div>
+  {% if devices %}
+  <table class="data devices">
+    <thead>
+      <tr>
+        <th scope="col">Nome</th><th scope="col">Responsável</th><th scope="col">Inscrito em</th>
+        <th scope="col">Certificado expira em</th><th scope="col">Situação</th>{% if is_admin %}<th scope="col">Ações</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in devices %}
+      <tr>
+        <td data-label="Nome">{{ d.name }}</td>
+        <td data-label="Responsável">{{ d.owner or "—" }}</td>
+        <td data-label="Inscrito em">{{ d.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td data-label="Certificado expira em">{{ d.cert_not_after.strftime("%Y-%m-%d") if d.cert_not_after else "—" }}</td>
+        <td data-label="Situação">{{ state_labels[d.state] }}{% if d.revoked_at %} ({{ d.revoked_at.strftime("%Y-%m-%d %H:%M") }}){% endif %}</td>
+        {% if is_admin %}
+        <td data-label="Ações" class="row-actions">
+          {% if d.state != "revoked" %}
+          <form method="post" action="/devices/{{ d.id }}/revoke">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Revogar</button>
+          </form>
+          {% else %}—{% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">Nenhum dispositivo inscrito.</p>
+  {% endif %}
+</section>
+{% if is_admin %}
+<section class="card">
+  <div class="page-head"><h2>Tokens de inscrição</h2></div>
+  {% if tokens %}
+  <table class="data tokens">
+    <thead>
+      <tr>
+        <th scope="col">Situação</th><th scope="col">Criado por</th><th scope="col">Expira em</th>
+        <th scope="col">Dispositivo</th><th scope="col">Usado em</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tokens %}
+      <tr>
+        <td data-label="Situação">{{ token_labels[t.status] }}</td>
+        <td data-label="Criado por">{{ t.created_by or "—" }}</td>
+        <td data-label="Expira em">{{ t.expires_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td data-label="Dispositivo">{{ t.device_name or "—" }}</td>
+        <td data-label="Usado em">{{ t.used_at.strftime("%Y-%m-%d %H:%M") if t.used_at else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">Nenhum token criado.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

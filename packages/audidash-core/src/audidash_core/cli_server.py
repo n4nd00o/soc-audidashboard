@@ -184,6 +184,26 @@ def cmd_assets(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- verified allowlist
+
+
+def sync_verified() -> frozenset[str]:
+    """Fetch the server's verified-manifest allowlist and cache it for later `run`s."""
+    directory = _directory()
+    try:
+        with _authed_client(directory) as client:
+            hashes = client.verified()
+        client_config.save_verified(directory, hashes)
+    except ClientError as exc:
+        raise ServerCliError(str(exc)) from None
+    return hashes
+
+
+def cached_verified() -> frozenset[str]:
+    """The allowlist from the last `plugins list --sync-verified` (empty when never synced)."""
+    return client_config.load_verified(_directory())
+
+
 # ---------------------------------------------------------------- run --upload
 
 

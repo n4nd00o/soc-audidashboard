@@ -13,6 +13,7 @@ Lifecycle rules (spec §7 / §12.3):
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -30,8 +31,10 @@ from audidash_server.models import Asset, Device, FindingEvent, FindingRecord, R
 from audidash_server.services import lifecycle
 
 AUTO_RESOLVABLE = (FindingStatus.open, FindingStatus.acknowledged)
-_MAX_PLUGIN_ID = 128
-_MAX_PLUGIN_VERSION = 64
+# Same shape as the plugin manifest `id`; fullmatch (never `$`) so a trailing newline fails.
+_PLUGIN_ID = re.compile(r"[a-z0-9][a-z0-9-]{2,63}")
+_PLUGIN_VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class IngestError(Exception):
@@ -65,12 +68,14 @@ def _validate(result: RunResult, asset: Asset) -> Trust | None:
             raise IngestError(
                 422, f"finding {finding.id!r} target does not match the asset's address or name"
             )
-    if not 0 < len(result.plugin_id) <= _MAX_PLUGIN_ID:
-        raise IngestError(422, "plugin_id length out of range")
-    if not 0 < len(result.plugin_version) <= _MAX_PLUGIN_VERSION:
-        raise IngestError(422, "plugin_version length out of range")
-    if result.manifest_sha256 is not None and len(result.manifest_sha256) != 64:
-        raise IngestError(422, "manifest_sha256 must be 64 hex characters")
+    if not _PLUGIN_ID.fullmatch(result.plugin_id):
+        raise IngestError(
+            422, "plugin_id must match the manifest id pattern [a-z0-9][a-z0-9-]{2,63}"
+        )
+    if not _PLUGIN_VERSION.fullmatch(result.plugin_version):
+        raise IngestError(422, "plugin_version must be 1-64 characters of [0-9A-Za-z.+-]")
+    if result.manifest_sha256 is not None and not _SHA256.fullmatch(result.manifest_sha256):
+        raise IngestError(422, "manifest_sha256 must be 64 lowercase hex characters")
     if result.started_at.tzinfo is None or result.finished_at.tzinfo is None:
         raise IngestError(422, "started_at/finished_at must carry a timezone")
     try:

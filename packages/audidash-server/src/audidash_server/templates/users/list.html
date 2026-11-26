@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Usuários · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="page-head"><h1>Usuários</h1></div>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form class="asset-form" method="post" action="/users" autocomplete="off">
+    <h2>Novo usuário</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="new-username">Usuário</label>
+    <input id="new-username" name="username" type="text" value="{{ form_username }}" maxlength="64" required>
+    <label for="new-role">Perfil</label>
+    <select id="new-role" name="role" required>
+      {% for r in roles %}<option value="{{ r.value }}"{% if form_role == r.value %} selected{% endif %}>{{ role_labels[r] }}</option>{% endfor %}
+    </select>
+    <label for="new-password">Senha temporária</label>
+    <input id="new-password" name="password" type="password" autocomplete="new-password" required>
+    <p class="hint">A pessoa configura o autenticador (TOTP) no primeiro acesso. Repasse a senha por um canal seguro.</p>
+    <div class="form-actions"><button type="submit">Criar usuário</button></div>
+  </form>
+</section>
+<section class="card">
+  <div class="page-head"><h2>Usuários cadastrados</h2></div>
+  <table class="data users">
+    <thead>
+      <tr>
+        <th scope="col">Usuário</th><th scope="col">Perfil</th><th scope="col">TOTP</th>
+        <th scope="col">Criado em</th><th scope="col">Situação</th><th scope="col">Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td data-label="Usuário">{{ u.username }}</td>
+        <td data-label="Perfil">{{ role_labels[u.role] }}</td>
+        <td data-label="TOTP">{{ "Configurado" if u.totp_secret_enc else "Pendente" }}</td>
+        <td data-label="Criado em">{{ u.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td data-label="Situação">{{ "Desativado" if u.disabled else "Ativo" }}</td>
+        <td data-label="Ações" class="row-actions">
+          {% if u.id == user.id %}
+          <span class="hint">(você)</span>
+          {% else %}
+          <form class="inline-form" method="post" action="/users/{{ u.id }}/role">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="visually-hidden" for="role-{{ u.id }}">Perfil de {{ u.username }}</label>
+            <select id="role-{{ u.id }}" name="role">
+              {% for r in roles %}<option value="{{ r.value }}"{% if u.role == r %} selected{% endif %}>{{ role_labels[r] }}</option>{% endfor %}
+            </select>
+            <button type="submit">Alterar perfil</button>
+          </form>
+          <form method="post" action="/users/{{ u.id }}/{{ 'enable' if u.disabled else 'disable' }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">{{ "Ativar" if u.disabled else "Desativar" }}</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

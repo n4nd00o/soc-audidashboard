@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Auditoria · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="page-head">
+    <h1>Auditoria</h1>
+    <form method="post" action="/audit/verify">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit">Verificar integridade</button>
+    </form>
+  </div>
+  {% if verified %}
+    {% if bad_seq is none %}
+    <p class="hint" role="status">Integridade verificada: a cadeia de auditoria está íntegra.</p>
+    {% else %}
+    <p class="error" role="alert">Cadeia de auditoria inválida: primeira entrada com problema, seq {{ bad_seq }}.</p>
+    {% endif %}
+  {% endif %}
+  <p class="hint" role="status">{{ page.total }} registro(s) · página {{ page.page }} de {{ page.pages }}</p>
+  {% if page.rows %}
+  <table class="data audit">
+    <thead>
+      <tr>
+        <th scope="col">Seq</th><th scope="col">Quando (UTC)</th><th scope="col">Autor</th>
+        <th scope="col">Ação</th><th scope="col">Alvo</th><th scope="col">Detalhes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in page.rows %}
+      <tr>
+        <td data-label="Seq">{{ row.seq }}</td>
+        <td data-label="Quando (UTC)">{{ row.at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        <td data-label="Autor">{{ row.actor }}</td>
+        <td data-label="Ação">{{ row.action }}</td>
+        <td data-label="Alvo">{{ row.target or "—" }}</td>
+        <td data-label="Detalhes"><code>{{ row.details }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">Nenhum registro de auditoria.</p>
+  {% endif %}
+  {% if page.pages > 1 %}
+  <nav class="pager" aria-label="Paginação">
+    {% if page.page > 1 %}<a href="/audit?page={{ page.page - 1 }}">Anterior</a>{% endif %}
+    {% if page.page < page.pages %}<a href="/audit?page={{ page.page + 1 }}">Próxima</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}
