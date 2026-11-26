@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from audidash_server import audit, clock
 from audidash_server.models import Asset, Device, FindingEvent, FindingRecord, Run, User
+from audidash_server.services import lifecycle
 
 AUTO_RESOLVABLE = (FindingStatus.open, FindingStatus.acknowledged)
 _MAX_PLUGIN_ID = 128
@@ -152,6 +153,7 @@ def ingest_run(
         known = {rec.fingerprint: rec for rec in db.scalars(query)}
 
     new = updated = auto_resolved = 0
+    reopen: list[uuid.UUID] = []
     for fp, finding in reported.items():
         rec = known.get(fp)
         if rec is None:
@@ -176,10 +178,7 @@ def ingest_run(
         rec.last_seen = now
         rec.last_run_id = run_id
         if rec.status is FindingStatus.auto_resolved:
-            rec.status = FindingStatus.open
-            rec.status_changed_at = now
-            rec.status_changed_by = None
-            event(rec, FindingStatus.auto_resolved, FindingStatus.open)
+            reopen.append(rec.id)
         updated += 1
 
     try:
@@ -187,6 +186,17 @@ def ingest_run(
     except IntegrityError:
         db.rollback()  # a concurrent run created the same fingerprint first
         raise IngestError(409, "concurrent upload for this asset; retry") from None
+    for finding_pk in reopen:  # guarded: only a finding still auto_resolved is re-opened
+        lifecycle.transition(
+            db,
+            finding_pk,
+            to_status=FindingStatus.open,
+            allowed_from={FindingStatus.auto_resolved},
+            user_id=None,
+            run_id=run_id,
+            justification=None,
+            at=now,
+        )
 
     if result.status is RunStatus.ok:
         stale = db.scalars(
@@ -195,15 +205,22 @@ def ingest_run(
                 FindingRecord.plugin_id == result.plugin_id,
                 FindingRecord.status.in_(AUTO_RESOLVABLE),
             )
-        )
+        ).all()
         for rec in stale:
             if rec.fingerprint in reported:
                 continue
-            event(rec, rec.status, FindingStatus.auto_resolved)
-            rec.status = FindingStatus.auto_resolved
-            rec.status_changed_at = now
-            rec.status_changed_by = None
-            auto_resolved += 1
+            # Guarded UPDATE: an analyst's concurrent manual state is never overwritten.
+            if lifecycle.transition(
+                db,
+                rec.id,
+                to_status=FindingStatus.auto_resolved,
+                allowed_from=AUTO_RESOLVABLE,
+                user_id=None,
+                run_id=run_id,
+                justification=None,
+                at=now,
+            ):
+                auto_resolved += 1
 
     db.add_all(events)
     scored = [

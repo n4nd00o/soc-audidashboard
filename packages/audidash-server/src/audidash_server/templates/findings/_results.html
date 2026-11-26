@@ -1,0 +1,35 @@
+<div id="findings-results">
+  <p class="hint" role="status">{{ page.total }} achado(s) · página {{ page.page }} de {{ page.pages }}</p>
+  {% if page.rows %}
+  <table class="data findings">
+    <thead>
+      <tr>
+        <th scope="col">Severidade</th><th scope="col">Título</th><th scope="col">Ativo</th>
+        <th scope="col">Plugin</th><th scope="col">Categoria</th><th scope="col">Status</th>
+        <th scope="col">Visto por último</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in page.rows %}
+      <tr>
+        <td data-label="Severidade"><span class="sev-tag sev-{{ row.severity.value }}">{{ severity_labels[row.severity] }}</span></td>
+        <td data-label="Título"><a href="/findings/{{ row.id }}">{{ row.title }}</a></td>
+        <td data-label="Ativo">{{ row.asset_name }}</td>
+        <td data-label="Plugin">{{ row.plugin_id }}</td>
+        <td data-label="Categoria">{{ category_labels[row.category] }}</td>
+        <td data-label="Status">{{ status_labels[row.status] }}</td>
+        <td data-label="Visto por último">{{ row.last_seen.strftime("%Y-%m-%d %H:%M") }}{% if row.stale %} <span class="stale">(desatualizado)</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">Nenhum achado encontrado para estes filtros.</p>
+  {% endif %}
+  {% if page.pages > 1 %}
+  <nav class="pager" aria-label="Paginação">
+    {% if page.page > 1 %}{% set prev_url = "/findings" ~ ("?" ~ filters.params(page.page - 1) if filters.params(page.page - 1) else "") %}<a href="{{ prev_url }}" hx-get="{{ prev_url }}" hx-target="#findings-results" hx-swap="outerHTML" hx-push-url="true">Anterior</a>{% endif %}
+    {% if page.page < page.pages %}{% set next_url = "/findings?" ~ filters.params(page.page + 1) %}<a href="{{ next_url }}" hx-get="{{ next_url }}" hx-target="#findings-results" hx-swap="outerHTML" hx-push-url="true">Próxima</a>{% endif %}
+  </nav>
+  {% endif %}
+</div>
