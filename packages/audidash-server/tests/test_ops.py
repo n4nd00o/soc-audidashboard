@@ -1,7 +1,10 @@
 import multiprocessing
 import os
+import socket
+import ssl
 import stat
 import sys
+import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -273,6 +276,8 @@ def test_create_enrollment_token_prints_once_and_audits(
 def test_create_enrollment_token_unknown_user(
     ops_env: Settings, db_session: DbSession, capsys: Any
 ) -> None:
+    assert cli.main(["init-ca"]) == 0
+    capsys.readouterr()
     assert cli.main(["create-enrollment-token", "--created-by", "ghost"]) == 1
     assert "usuário não encontrado" in capsys.readouterr().err
     assert _count(db_session, EnrollmentToken) == 0
@@ -343,7 +348,9 @@ def test_issue_server_cert_properties(tmp_path: Path, frozen_clock: Any) -> None
     cert.verify_directly_issued_by(ca.cert)  # signed by the internal CA
 
 
-@pytest.mark.parametrize("hosts", [[], ["bad host"], ["x;rm"], [""]])
+@pytest.mark.parametrize(
+    "hosts", [[], ["bad host"], ["x;rm"], [""], ["my_host.example"], ["host.123"], ["-a.example"]]
+)
 def test_issue_server_cert_rejects_bad_hosts(tmp_path: Path, hosts: list[str]) -> None:
     ca = load_or_create_ca(tmp_path, SecretStr(PASSPHRASE))
     with pytest.raises(CAError):
@@ -355,7 +362,7 @@ def test_ca_creation_leaves_no_temp_files_and_key_is_private(tmp_path: Path) -> 
     assert sorted(p.name for p in (tmp_path / "ca").iterdir()) == ["ca.crt", "ca.key"]
 
 
-def test_crash_before_cert_publish_leaves_no_half_ca(
+def test_crash_remnant_key_is_never_overwritten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     real_replace = os.replace
@@ -369,12 +376,47 @@ def test_crash_before_cert_publish_leaves_no_half_ca(
     with pytest.raises(OSError, match="simulated crash"):
         load_or_create_ca(tmp_path, SecretStr(PASSPHRASE))
     monkeypatch.setattr(os, "replace", real_replace)
+    key_path = tmp_path / "ca" / "ca.key"
     assert not (tmp_path / "ca" / "ca.crt").exists()
     assert [p.name for p in (tmp_path / "ca").iterdir() if p.name.endswith(".tmp")] == []
-    ca = load_or_create_ca(tmp_path, SecretStr(PASSPHRASE))  # recovers cleanly
-    assert load_or_create_ca(tmp_path, SecretStr(PASSPHRASE)).fingerprint_sha256() == (
-        ca.fingerprint_sha256()
-    )
+    before = key_path.read_bytes()
+    with pytest.raises(CAError, match="ca.key present without ca.crt"):
+        load_or_create_ca(tmp_path, SecretStr(PASSPHRASE))
+    with pytest.raises(CAError, match="init-ca --force"):
+        load_existing_ca(tmp_path, SecretStr(PASSPHRASE))
+    assert key_path.read_bytes() == before  # untouched
+
+
+def test_cli_orphan_key_exit_2_and_force_moves_it_aside(
+    ops_env: Settings, frozen_clock: Any, capsys: Any
+) -> None:
+    frozen_clock.current = NOW
+    ca_dir = ops_env.data_dir / "ca"
+    ca_dir.mkdir()
+    (ca_dir / "ca.key").write_bytes(b"precious")
+    for argv in (["init-ca"], ["show-ca-fingerprint"]):
+        assert cli.main(argv) == 2
+        err = capsys.readouterr().err
+        assert "init-ca --force" in err
+        assert len(err.strip().splitlines()) == 1
+    assert (ca_dir / "ca.key").read_bytes() == b"precious"
+
+    assert cli.main(["init-ca", "--force"]) == 0
+    cap = capsys.readouterr()
+    assert "reinscrever" in cap.err
+    assert (ca_dir / "ca.key.orphan-20261125T120000Z").read_bytes() == b"precious"
+    assert load_existing_ca(ops_env.data_dir, SecretStr(PASSPHRASE)) is not None
+
+
+def test_force_with_existing_ca_preserves_old_files(ops_env: Settings, capsys: Any) -> None:
+    assert cli.main(["init-ca"]) == 0
+    old = capsys.readouterr().out
+    assert cli.main(["init-ca", "--force"]) == 0
+    new = capsys.readouterr().out
+    assert old != new
+    names = sorted(p.name for p in (ops_env.data_dir / "ca").iterdir())
+    assert sum(".orphan-" in n for n in names) == 2
+    assert "ca.key" in names and "ca.crt" in names
 
 
 def _create_in_process(data_dir: str, queue: Any) -> None:
@@ -394,3 +436,95 @@ def test_concurrent_creators_converge_on_one_ca(tmp_path: Path) -> None:
     assert len(fingerprints) == 1
     loaded = load_or_create_ca(tmp_path, SecretStr(PASSPHRASE))
     assert loaded.fingerprint_sha256() in fingerprints
+
+
+def test_issue_server_cert_days_cap_and_ipv6_brackets(tmp_path: Path) -> None:
+    ca = load_or_create_ca(tmp_path, SecretStr(PASSPHRASE))
+    with pytest.raises(CAError):
+        ca.issue_server_cert(["h.example"], 399)
+    cert_pem, _ = ca.issue_server_cert(["[::1]"], 398)
+    cert = x509.load_pem_x509_certificate(cert_pem)
+    assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "::1"
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert [str(i) for i in san.get_values_for_type(x509.IPAddress)] == ["::1"]
+    assert san.get_values_for_type(x509.DNSName) == []
+
+
+def test_create_enrollment_token_needs_ca_and_commits_nothing(
+    ops_env: Settings, db_session: DbSession, capsys: Any
+) -> None:
+    assert cli.main(["create-enrollment-token", "--created-by", "root"]) == 1
+    assert "run init-ca" in capsys.readouterr().err
+    assert _count(db_session, EnrollmentToken) == 0
+    assert _count(db_session, AuditEntry) == 0
+
+
+def test_create_enrollment_token_several_admins_needs_created_by(
+    ops_env: Settings, db_session: DbSession, capsys: Any
+) -> None:
+    for name in ("a1", "a2"):
+        db_session.add(
+            User(
+                id=uuid.uuid4(),
+                username=name,
+                password_hash="x",  # noqa: S106
+                totp_secret_enc=None,
+                role=Role.admin,
+                failed_logins=0,
+                created_at=NOW,
+            )
+        )
+    db_session.commit()
+    assert cli.main(["init-ca"]) == 0
+    capsys.readouterr()
+    assert cli.main(["create-enrollment-token"]) == 1
+    assert "--created-by" in capsys.readouterr().err
+    assert _count(db_session, EnrollmentToken) == 0
+
+
+def test_tls_handshake_against_issued_cert(tmp_path: Path) -> None:
+    ca = load_or_create_ca(tmp_path, SecretStr(PASSPHRASE))
+    cert_pem, key_pem = ca.issue_server_cert(["localhost", "127.0.0.1"], 30)
+    (tmp_path / "ca.pem").write_bytes(ca.cert_pem)
+    (tmp_path / "srv.crt").write_bytes(cert_pem)
+    (tmp_path / "srv.key").write_bytes(key_pem)
+
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(tmp_path / "srv.crt", tmp_path / "srv.key")
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    port = listener.getsockname()[1]
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            try:
+                with server_ctx.wrap_socket(conn, server_side=True) as tls:
+                    tls.recv(1)
+            except (ssl.SSLError, OSError):
+                conn.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    def handshake(server_name: str) -> None:
+        ctx = ssl.create_default_context(cafile=str(tmp_path / "ca.pem"))
+        assert ctx.check_hostname
+        with (
+            socket.create_connection(("127.0.0.1", port), timeout=10) as raw,
+            ctx.wrap_socket(raw, server_hostname=server_name) as tls,
+        ):
+            tls.send(b"x")
+
+    try:
+        handshake("localhost")
+        handshake("127.0.0.1")
+        with pytest.raises(ssl.SSLCertVerificationError):
+            handshake("wrong.example")
+    finally:
+        listener.close()
+        thread.join(timeout=5)

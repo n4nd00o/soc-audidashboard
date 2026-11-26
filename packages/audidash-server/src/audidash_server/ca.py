@@ -35,14 +35,13 @@ DEVICE_CERT_VALIDITY = timedelta(days=90)
 CA_COMMON_NAME = "SOC AudiDashboard Internal CA"
 _CLOCK_SKEW = timedelta(minutes=5)
 SERVER_CERT_DEFAULT_DAYS = 397
+SERVER_CERT_MAX_DAYS = 398
 _LOCK_WAIT_SECONDS = 20.0
 _LOCK_STALE_SECONDS = 30.0
 
 
-_DNS_NAME = re.compile(
-    r"(?=.{1,253}$)[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
-    r"(?:\.[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*"
-)
+_LDH_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_DNS_NAME = re.compile(rf"(?=.{{1,253}}$){_LDH_LABEL}(?:\.{_LDH_LABEL})*")
 
 
 class CAError(ValueError):
@@ -113,17 +112,17 @@ class CA:
 
         The unencrypted key is for the reverse proxy; the caller must store it 0600.
         """
-        names = [h.strip() for h in hosts if h.strip()]
+        names = [h.strip().removeprefix("[").removesuffix("]") for h in hosts if h.strip()]
         if not names:
             raise CAError("at least one host is required")
-        if not 1 <= days <= 3650:
-            raise CAError("days must be between 1 and 3650")
+        if not 1 <= days <= SERVER_CERT_MAX_DAYS:
+            raise CAError(f"days must be between 1 and {SERVER_CERT_MAX_DAYS}")
         sans: list[x509.GeneralName] = []
         for name in names:
             try:
-                sans.append(x509.IPAddress(ipaddress.ip_address(name.strip("[]"))))
+                sans.append(x509.IPAddress(ipaddress.ip_address(name)))
             except ValueError:
-                if not _DNS_NAME.fullmatch(name):
+                if not _DNS_NAME.fullmatch(name) or name.rsplit(".", 1)[-1].isdigit():
                     raise CAError(f"invalid host name: {name!r}") from None
                 sans.append(x509.DNSName(name))
         key = ec.generate_private_key(ec.SECP256R1())
@@ -275,8 +274,17 @@ def _secret(passphrase: SecretStr) -> bytes:
     return secret
 
 
+_ORPHAN_MESSAGE = (
+    "incomplete CA: ca.key present without ca.crt — restore ca.crt from backup, "
+    "or run `audidash-server init-ca --force` to start a new CA"
+)
+
+
 def load_or_create_ca(data_dir: Path, passphrase: SecretStr) -> CA:
-    """Load the CA from ``data_dir/ca/``, creating it (atomically, multi-process safe) once."""
+    """Load the CA from ``data_dir/ca/``, creating it (atomically, multi-process safe) once.
+
+    An existing ``ca.key`` is never overwritten: a key without its certificate is an error.
+    """
     secret = _secret(passphrase)
     ca_dir, key_path, cert_path = _paths(data_dir)
     if not cert_path.exists():
@@ -284,17 +292,37 @@ def load_or_create_ca(data_dir: Path, passphrase: SecretStr) -> CA:
         with _creation_lock(ca_dir):
             # Re-check under the lock: a concurrent creator may have finished meanwhile.
             if not cert_path.exists():
+                if key_path.exists():
+                    raise CAError(_ORPHAN_MESSAGE)
                 return _create_ca_files(ca_dir, key_path, cert_path, secret)
     return _load_ca_files(key_path, cert_path, ca_dir, secret)
 
 
 def load_existing_ca(data_dir: Path, passphrase: SecretStr) -> CA | None:
-    """Load the CA without creating it; ``None`` when no certificate has been issued yet."""
+    """Load the CA without creating it; ``None`` when no CA files exist at all."""
     secret = _secret(passphrase)
     ca_dir, key_path, cert_path = _paths(data_dir)
     if not cert_path.exists():
+        if key_path.exists():
+            raise CAError(_ORPHAN_MESSAGE)
         return None
     return _load_ca_files(key_path, cert_path, ca_dir, secret)
+
+
+def replace_ca(data_dir: Path, passphrase: SecretStr) -> tuple[CA, list[Path]]:
+    """Start a new CA, renaming any existing files to ``*.orphan-<UTC stamp>`` (never deleted)."""
+    secret = _secret(passphrase)
+    ca_dir, key_path, cert_path = _paths(data_dir)
+    ca_dir.mkdir(parents=True, exist_ok=True)
+    stamp = clock.now().strftime("%Y%m%dT%H%M%SZ")
+    moved: list[Path] = []
+    with _creation_lock(ca_dir):
+        for path in (key_path, cert_path):
+            if path.exists():
+                target = path.with_name(f"{path.name}.orphan-{stamp}")
+                os.replace(path, target)
+                moved.append(target)
+        return _create_ca_files(ca_dir, key_path, cert_path, secret), moved
 
 
 def _load_ca_files(key_path: Path, cert_path: Path, ca_dir: Path, secret: bytes) -> CA:
