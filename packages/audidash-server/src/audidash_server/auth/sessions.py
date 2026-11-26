@@ -89,11 +89,6 @@ def load_session(db: DbSession, token: str, settings: Settings) -> Session | Non
     return row
 
 
-def client_ip(request: Request) -> str | None:
-    """Peer address as seen by the app (the reverse proxy's, unless it forwards the client)."""
-    return request.client.host if request.client else None
-
-
 def _load(request: Request, db: DbSession) -> tuple[Session, User] | None:
     token = request.cookies.get(SESSION_COOKIE)
     if not token:

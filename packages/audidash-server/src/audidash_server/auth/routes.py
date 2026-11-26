@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import uuid
 from typing import Annotated, Any
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, update
 from sqlalchemy.orm import Session as DbSession
 from starlette.responses import Response
 
-from audidash_server import audit, clock
-from audidash_server.auth import passwords
+from audidash_server import clock
+from audidash_server.auth import service
 from audidash_server.auth.csrf import (
     check_login_csrf,
     csrf_protect,
@@ -24,16 +23,10 @@ from audidash_server.auth.csrf import (
     set_login_csrf_cookie,
     tokens_equal,
 )
-from audidash_server.auth.lockout import (
-    MAX_FAILED_LOGINS,
-    clear_failures_if_unlocked,
-    record_failure,
-)
 from audidash_server.auth.ratelimit import LoginRateLimiter
 from audidash_server.auth.sessions import (
     SESSION_COOKIE,
     clear_cookie,
-    client_ip,
     create_session,
     current_session,
     current_user,
@@ -42,7 +35,6 @@ from audidash_server.auth.sessions import (
     set_cookie,
 )
 from audidash_server.auth.totp import (
-    decrypt_totp_secret,
     encrypt_totp_secret,
     provisioning_uri,
     qr_svg_data_uri,
@@ -52,6 +44,7 @@ from audidash_server.auth.totp import (
 )
 from audidash_server.db import get_session
 from audidash_server.models import Session, User
+from audidash_server.proxy import client_ip
 from audidash_server.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -106,44 +99,6 @@ def login_form(request: Request) -> Response:
     return _login_page(request)
 
 
-def _totp_step(request: Request, user: User, code: str) -> int | None:
-    """Matching, not-yet-used TOTP step for an enrolled user, else None."""
-    if user.totp_secret_enc is None:
-        return None
-    try:
-        secret = decrypt_totp_secret(user.totp_secret_enc, _secret_key(request))
-    except ValueError:
-        logger.warning("TOTP secret of user %s cannot be decrypted (secret key changed?)", user.id)
-        return None
-    step = totp_match_step(secret, code)
-    if step is None or (user.totp_last_step is not None and step <= user.totp_last_step):
-        return None
-    return step
-
-
-def _claim_totp_step(db: DbSession, user: User, step: int) -> bool:
-    """Atomically record `step` as used; False if it (or a later one) was already used."""
-    result = db.execute(
-        update(User)
-        .where(User.id == user.id)
-        .where(or_(User.totp_last_step.is_(None), User.totp_last_step < step))
-        .values(totp_last_step=step)
-        .execution_options(synchronize_session=False)
-    )
-    claimed: int = getattr(result, "rowcount", 0)
-    if claimed == 1:
-        user.totp_last_step = step
-    return claimed == 1
-
-
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-
-
-def _audit_username(username: str) -> str:
-    """Bounded, control-character-free copy of a submitted username for the audit log."""
-    return _CONTROL_CHARS.sub("?", username[:64])
-
-
 @router.post("/login")
 def login_submit(
     request: Request,
@@ -160,70 +115,20 @@ def login_submit(
     if not limiter.hit(ip or "unknown"):
         return _login_page(request, error=RATE_LIMITED_ERROR, status_code=429)
 
-    def fail() -> Response:
+    result = service.authenticate(
+        db,
+        username=username,
+        password=password,
+        totp_code=totp,
+        secret_key=_secret_key(request),
+    )
+    if result.outcome is not service.LoginOutcome.ok or result.user is None:
         return _login_page(
             request, error=GENERIC_LOGIN_ERROR, username=username[:64], status_code=401
         )
-
-    def audit_failure() -> None:
-        audit.record(
-            db,
-            action="login.failure",
-            actor_user_id=None,
-            actor_device_id=None,
-            target="login",
-            details={"username": _audit_username(username), "reason": "invalid"},
-        )
-
-    def fail_rolled_back() -> Response:
-        """Race losers: their transaction was rolled back; still leave an audit row."""
-        audit_failure()
-        db.commit()
-        return fail()
-
-    def fail_counted(user_id: uuid.UUID | None) -> Response:
-        """Every failure path does the same DB work: one counted UPDATE and a commit."""
-        if record_failure(db, user_id, now):
-            logger.warning("account %s locked after %d failures", user_id, MAX_FAILED_LOGINS)
-        # Same transaction as the counter UPDATE; never says which factor failed.
-        audit_failure()
-        db.commit()
-        return fail()
-
-    now = clock.now()
-    user = None
-    if len(username) <= 64:
-        user = db.scalars(select(User).where(User.username == username)).first()
-    if user is None or user.disabled:
-        passwords.verify_password(passwords.dummy_hash(), password)  # equalize timing
-        return fail_counted(None)
-
-    password_ok = passwords.verify_password(user.password_hash, password)
-    enrolled = user.totp_secret_enc is not None
-    step = _totp_step(request, user, totp) if enrolled else None
-    if user.locked_until is not None and user.locked_until > now:
-        return fail_counted(None)  # attempts while locked are not counted
-    if not password_ok or (enrolled and step is None):
-        return fail_counted(user.id)
-
-    if not clear_failures_if_unlocked(db, user.id, now):
-        db.rollback()  # a concurrent attempt locked the account meanwhile
-        return fail_rolled_back()
-    if passwords.needs_rehash(user.password_hash):
-        user.password_hash = passwords.hash_password(password)
-    if step is not None and not _claim_totp_step(db, user, step):
-        db.rollback()  # a concurrent login consumed this code first
-        return fail_rolled_back()
+    enrolled = result.totp_enrolled
     delete_session_by_token(db, request.cookies.get(SESSION_COOKIE))  # rotate
-    token, _ = create_session(db, user, ip, pending=not enrolled)
-    audit.record(
-        db,
-        action="login.success",
-        actor_user_id=user.id,
-        actor_device_id=None,
-        target=user.username,
-        details={"second_factor_enrolled": enrolled},
-    )
+    token, _ = create_session(db, result.user, ip, pending=not enrolled)
     db.commit()
     response = _see_other("/" if enrolled else "/totp/setup")
     set_cookie(response, SESSION_COOKIE, token)
