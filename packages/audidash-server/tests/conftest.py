@@ -26,7 +26,7 @@ from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import event, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session as DbSession
 
 TEST_PASSWORD = "Corr3ct-Horse-Battery-Staple"  # noqa: S105 - test fixture value
@@ -68,10 +68,32 @@ def _pg_like_nul_guard() -> Iterator[None]:
         event.remove(Engine, "before_cursor_execute", _reject_nul_parameters)
 
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def ensure_disposable_test_database(url: str) -> None:
+    """Refuse (before any DROP) unless the database is clearly a throwaway test database.
+
+    Accepted: a name ending in ``_test`` on any host, or a name containing ``test`` on a
+    local host. Anything else aborts the session with a usage error.
+    """
+    parsed = make_url(url)
+    name = parsed.database or ""
+    local = (parsed.host or "localhost") in _LOCAL_HOSTS
+    if name.endswith("_test") or (local and "test" in name):
+        return
+    raise pytest.UsageError(
+        f"AUDIDASH_TEST_DATABASE_URL points at database {name!r} on {parsed.host!r}: the test "
+        "suite DROPS its public schema, so the database name must end with '_test' (or contain "
+        "'test' on localhost). Refusing to run."
+    )
+
+
 @pytest.fixture(scope="session")
 def _pg_schema() -> str:
     if not TEST_DATABASE_URL:
         return ""
+    ensure_disposable_test_database(TEST_DATABASE_URL)
     engine = make_engine(TEST_DATABASE_URL)
     try:
         # Start from a clean slate, then build the schema exactly as production does.

@@ -113,7 +113,9 @@ uv run audidash run http-security-headers --target example.com --target-type web
 
 Credenciais **não** são aceitas pela linha de comando (vazariam no histórico do shell e no argv).
 A suíte de testes do servidor usa SQLite por padrão; o CI também a executa contra PostgreSQL
-(`AUDIDASH_TEST_DATABASE_URL`).
+(`AUDIDASH_TEST_DATABASE_URL`). Atenção: as fixtures **apagam o schema `public`** desse banco, por
+isso só aceitam um banco descartável cujo nome termine em `_test` (ou contenha `test` em
+`localhost`); qualquer outro nome aborta a execução.
 
 ## Como escrever um plugin
 
