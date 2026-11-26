@@ -153,3 +153,76 @@ def test_canonical_json_is_stable() -> None:
         '{"action":"a","actor_device_id":null,"actor_user_id":null,'
         '"at":"2026-01-02T03:04:05.000000+00:00","details":{"a":"é","b":1},"target":"t"}'
     )
+
+
+def _failures(app_client: TestClient) -> list[AuditEntry]:
+    with app_client.app.state.sessionmaker() as s:  # type: ignore[attr-defined]
+        rows = s.scalars(
+            select(AuditEntry).where(AuditEntry.action == "login.failure").order_by(AuditEntry.seq)
+        ).all()
+        assert verify_chain(s) is None
+        return list(rows)
+
+
+def test_totp_claim_race_is_audited(
+    app_client: TestClient,
+    make_user: Any,
+    login: Any,
+    frozen_clock: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from audidash_server.auth import routes
+
+    monkeypatch.setattr(routes, "_claim_totp_step", lambda db, user, step: False)
+    u = make_user()
+    assert login(u.username, u.password, u.code(frozen_clock.current)).status_code == 401
+    assert [r.details for r in _failures(app_client)] == [
+        {"username": u.username, "reason": "invalid"}
+    ]
+
+
+def test_concurrent_lock_path_is_audited(
+    app_client: TestClient,
+    make_user: Any,
+    login: Any,
+    frozen_clock: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from audidash_server.auth import routes
+
+    monkeypatch.setattr(routes, "clear_failures_if_unlocked", lambda db, uid, now: False)
+    u = make_user()
+    assert login(u.username, u.password, u.code(frozen_clock.current)).status_code == 401
+    assert len(_failures(app_client)) == 1
+
+
+def test_audit_username_sanitized_and_bounded(app_client: TestClient, login: Any) -> None:
+    login("a\x00b\x1b[31m\x85\x7f" + "x" * 100, "Wrong-password-123", "000000")
+    (row,) = _failures(app_client)
+    name = row.details["username"]
+    assert len(name) <= 64
+    assert not any(ord(c) < 32 or 0x7F <= ord(c) <= 0x9F for c in name)
+    assert name.startswith("a?b?[31m??")
+
+
+def test_non_utc_aware_clock_roundtrips(
+    db_session: DbSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from audidash_server import clock
+
+    tz = timezone(timedelta(hours=-3))
+    monkeypatch.setattr(clock, "now", lambda: datetime(2026, 5, 1, 9, 8, 7, 123456, tzinfo=tz))
+    _add(db_session, 2)
+    db_session.expire_all()
+    assert verify_chain(db_session) is None
+
+
+def test_cli_audit_verify_unreachable_db(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    monkeypatch.setenv("AUDIDASH_DATABASE_URL", f"sqlite:///{(tmp_path / 'empty.db').as_posix()}")
+    assert cli.main(["audit", "verify"]) == 2  # no audit_log table
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "Traceback" not in err

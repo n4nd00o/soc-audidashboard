@@ -11,6 +11,7 @@ import uuid
 
 import segno
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session as DbSession
 
 from audidash_server import audit, clock
@@ -108,6 +109,9 @@ def audit_verify() -> int:
         with DbSession(engine) as db:
             bad = audit.verify_chain(db)
             total = db.scalar(select(func.count()).select_from(AuditEntry)) or 0
+    except SQLAlchemyError as exc:
+        print(f"erro: banco de dados inacessível ({type(exc).__name__})", file=sys.stderr)
+        return 2
     finally:
         engine.dispose()
     if bad is not None:
