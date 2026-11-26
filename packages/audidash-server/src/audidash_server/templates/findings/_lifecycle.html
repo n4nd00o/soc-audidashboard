@@ -1,0 +1,32 @@
+<section class="card" id="finding-lifecycle">
+  <h2>Ciclo de vida</h2>
+  <p>Status atual: <strong class="status-current">{{ status_labels[finding.status] }}</strong>{% if finding.justification %} — <span class="justification">{{ finding.justification }}</span>{% endif %}</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if can_write and actions %}
+  <form class="lifecycle-form" method="post" action="/findings/{{ finding.id }}/status" hx-post="/findings/{{ finding.id }}/status" hx-target="#finding-lifecycle" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="justification">Justificativa (obrigatória para falso positivo e risco aceito)</label>
+    <textarea id="justification" name="justification" rows="3" maxlength="1000">{{ justification_value }}</textarea>
+    <div class="form-actions">
+      {% for target, label in actions %}<button type="submit" name="to" value="{{ target.value }}"{% if target.value == "open" %} class="ghost"{% endif %}>{{ label }}</button>{% endfor %}
+    </div>
+  </form>
+  {% endif %}
+  <h3>Histórico</h3>
+  {% if history %}
+  <table class="data history">
+    <thead><tr><th scope="col">Quando</th><th scope="col">De</th><th scope="col">Para</th><th scope="col">Por</th><th scope="col">Justificativa</th></tr></thead>
+    <tbody>
+      {% for ev in history %}
+      <tr>
+        <td data-label="Quando">{{ ev.at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        <td data-label="De">{{ status_labels[ev.from_status] if ev.from_status else "—" }}</td>
+        <td data-label="Para">{{ status_labels[ev.to_status] }}</td>
+        <td data-label="Por">{{ ev.actor or "Automático (execução)" }}</td>
+        <td data-label="Justificativa">{{ ev.justification or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="hint">Sem eventos.</p>{% endif %}
+</section>

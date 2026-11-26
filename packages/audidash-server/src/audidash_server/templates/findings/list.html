@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Achados · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="page-head"><h1>Achados</h1></div>
+  <form class="filters" method="get" action="/findings" hx-get="/findings" hx-target="#findings-results" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change, submit">
+    <div class="filter">
+      <label for="f-asset">Ativo</label>
+      <select id="f-asset" name="asset">
+        <option value="">Todos</option>
+        {% for aid, aname in filter_assets %}<option value="{{ aid }}"{% if filters.asset == aid %} selected{% endif %}>{{ aname }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="filter">
+      <label for="f-severity">Severidade</label>
+      <select id="f-severity" name="severity">
+        <option value="">Todas</option>
+        {% for s in severities %}<option value="{{ s.value }}"{% if filters.severity == s %} selected{% endif %}>{{ severity_labels[s] }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="filter">
+      <label for="f-category">Categoria</label>
+      <select id="f-category" name="category">
+        <option value="">Todas</option>
+        {% for c in categories %}<option value="{{ c.value }}"{% if filters.category == c %} selected{% endif %}>{{ category_labels[c] }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="filter">
+      <label for="f-status">Status</label>
+      <select id="f-status" name="status">
+        <option value=""{% if not filters.status %} selected{% endif %}>Abertos e reconhecidos</option>
+        <option value="{{ status_all }}"{% if filters.status == status_all %} selected{% endif %}>Todos</option>
+        {% for s in statuses %}<option value="{{ s.value }}"{% if filters.status == s.value %} selected{% endif %}>{{ status_labels[s] }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="filter">
+      <label for="f-plugin">Plugin</label>
+      <select id="f-plugin" name="plugin">
+        <option value="">Todos</option>
+        {% for p in filter_plugins %}<option value="{{ p }}"{% if filters.plugin == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="filter filter-check">
+      <input type="checkbox" id="f-stale" name="stale" value="1"{% if filters.stale %} checked{% endif %}>
+      <label for="f-stale">Somente desatualizados (&gt; 90 dias)</label>
+    </div>
+    <div class="filter"><button type="submit">Filtrar</button></div>
+  </form>
+  {% include "findings/_results.html" %}
+</section>
+{% endblock %}

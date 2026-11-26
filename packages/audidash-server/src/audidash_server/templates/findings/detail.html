@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ finding.title }} · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card">
+  <p><a href="/findings">&larr; Achados</a></p>
+  <h1>{{ finding.title }}</h1>
+  <dl class="meta">
+    <dt>Severidade</dt><dd><span class="sev-tag sev-{{ finding.severity.value }}">{{ severity_labels[finding.severity] }}</span></dd>
+    <dt>Categoria</dt><dd>{{ category_labels[finding.category] }}</dd>
+    <dt>Ativo</dt><dd>{{ asset.name if asset else "—" }}</dd>
+    <dt>Plugin</dt><dd>{{ finding.plugin_id }} · {{ finding.finding_id }}</dd>
+    <dt>Primeira ocorrência</dt><dd>{{ finding.first_seen.strftime("%Y-%m-%d %H:%M") }}</dd>
+    <dt>Última ocorrência</dt><dd>{{ finding.last_seen.strftime("%Y-%m-%d %H:%M") }}</dd>
+  </dl>
+  <h2>Evidência</h2>
+  {% if finding.evidence %}<pre class="evidence">{{ finding.evidence }}</pre>{% else %}<p class="hint">Sem evidência registrada.</p>{% endif %}
+  <h2>Recomendação</h2>
+  {% if finding.recommendation %}<p class="recommendation">{{ finding.recommendation }}</p>{% else %}<p class="hint">Sem recomendação.</p>{% endif %}
+  <h2>Referências</h2>
+  {% if references %}
+  <ul class="references">
+    {% for ref in references %}<li>{% if ref.url %}<a href="{{ ref.url }}" rel="noopener noreferrer" target="_blank">{{ ref.text }}</a>{% else %}{{ ref.text }}{% endif %}</li>{% endfor %}
+  </ul>
+  {% else %}<p class="hint">Sem referências.</p>{% endif %}
+</section>
+{% include "findings/_lifecycle.html" %}
+{% endblock %}
