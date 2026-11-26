@@ -32,3 +32,6 @@ Thumbs.db
 # Catalog signing keys (never commit)
 catalog.key
 *.private.pem
+
+# Deployment: the example env file is committed, real .env files are not
+!deploy/.env.example

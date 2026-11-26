@@ -1,0 +1,60 @@
+{
+	# No admin API: configuration is immutable at runtime.
+	admin off
+	# Never try to install Caddy's internal root into a system trust store.
+	skip_install_trust
+	# Only the two HTTPS listeners below; no :80 redirect listener.
+	auto_https disable_redirects
+}
+
+# Dashboard + device enrolment (/enroll). Caddy's own internal CA; clients enrol with TOFU on
+# the AudiDashboard CA fingerprint returned by /enroll, so this certificate is not pinned.
+{$AUDIDASH_DASHBOARD_HOST:localhost}:8443 {
+	tls internal
+	header -Server
+
+	# Client-supplied copies of the trust headers are always discarded.
+	request_header -X-Audidash-Proxy-Secret
+	request_header -X-Client-Cert-Fingerprint
+
+	# The device API is only reachable on the mTLS listener.
+	handle /api/* {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy server:8000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Audidash-Proxy-Secret {$AUDIDASH_PROXY_SECRET}
+			header_up -X-Client-Cert-Fingerprint
+		}
+	}
+}
+
+# Device API: mutual TLS. Server certificate issued by the AudiDashboard internal CA
+# (the CLI pins ca.crt); client certificates must chain to the same CA.
+:9443 {
+	tls /shared/api.crt /shared/api.key {
+		client_auth {
+			mode require_and_verify
+			trust_pool file /shared/ca.crt
+		}
+	}
+	header -Server
+
+	request_header -X-Audidash-Proxy-Secret
+	request_header -X-Client-Cert-Fingerprint
+
+	handle /api/* {
+		reverse_proxy server:8000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Audidash-Proxy-Secret {$AUDIDASH_PROXY_SECRET}
+			# Lowercase hex SHA-256 of the client certificate DER.
+			header_up X-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}
