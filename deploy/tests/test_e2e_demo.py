@@ -2,7 +2,9 @@
 
 Needs a running Docker daemon with the stack up (`docker compose up -d --wait` in deploy/), so
 it only runs when AUDIDASH_E2E=1 (the CI ``compose-smoke`` job). It never touches the
-developer's own audidash config: the client runs with an isolated XDG_CONFIG_HOME.
+developer's own audidash config: the client runs with isolated XDG_CONFIG_HOME / APPDATA /
+LOCALAPPDATA / HOME. Linux (the CI runner) is the supported platform; the lab targets and the
+published ports are Linux-docker oriented.
 """
 
 from __future__ import annotations
@@ -57,6 +59,8 @@ class Client:
             **os.environ,
             "XDG_CONFIG_HOME": str(home / "config"),
             "HOME": str(home),
+            "APPDATA": str(home / "appdata"),
+            "LOCALAPPDATA": str(home / "localappdata"),
             "PYTHONUTF8": "1",
         }
 
@@ -145,6 +149,7 @@ def test_demo_end_to_end(tmp_path: Path) -> None:
         "print(json.dumps([[n, f, str(v)] for n, f, v in rows]))\n",
     )
     findings = {(name, fid): severity for name, fid, severity in json.loads(dump.strip())}
-    assert findings.get(("lab-tls", "TLS-EXPIRED")) == "critical"
-    assert ("lab-web", "HTTP-NO-CSP") in findings
-    assert ("lab-redis", "NET-OPEN-PORT") in findings
+    context = f"findings={findings}\ndemo stdout:\n{demo.stdout}\ndemo stderr:\n{demo.stderr}"
+    assert findings.get(("lab-tls", "TLS-EXPIRED")) == "critical", context
+    assert ("lab-web", "HTTP-NO-CSP") in findings, context
+    assert ("lab-redis", "NET-OPEN-PORT") in findings, context

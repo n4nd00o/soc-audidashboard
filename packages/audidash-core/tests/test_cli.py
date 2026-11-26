@@ -461,3 +461,45 @@ def test_list_empty_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
     code, out, _ = _run(["plugins", "list", "--plugins-dir", str(tmp_path)], capsys)
     assert code == 0
     assert "ID" in out
+
+
+@pytest.mark.parametrize("exc", [EOFError, KeyboardInterrupt])
+def test_run_community_confirmation_interrupted_declines(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    exc: type[BaseException],
+) -> None:
+    make_plugin(tmp_path)
+
+    class _Boom(_Tty):
+        def readline(self, *_a: Any) -> str:  # type: ignore[override]
+            raise exc
+
+    monkeypatch.setattr("sys.stdin", _Boom())
+    argv = ["run", "demo-plugin", "--target", "h", "--target-type", "local"]
+    code, _, err = _run([*argv, "--plugins-dir", str(tmp_path)], capsys)
+    assert code == 2
+    assert "plugin was not run" in err and "Traceback" not in err
+
+
+def test_main_keyboard_interrupt_is_one_line_exit_130(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("audidash_core.cli.run_local", _boom)
+    code, _, err = _run(
+        [
+            "run",
+            "http-security-headers",
+            "--target",
+            "127.0.0.1",
+            "--plugins-dir",
+            str(REPO_PLUGINS),
+        ],
+        capsys,
+    )
+    assert code == 130
+    assert err.strip().splitlines()[-1] == "interrupted" and "Traceback" not in err

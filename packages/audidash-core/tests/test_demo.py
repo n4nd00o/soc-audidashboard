@@ -1,10 +1,14 @@
 """`audidash demo`: asset bootstrap and the three lab runs, against the in-process server."""
 
+import datetime as dt
 import json
 from pathlib import Path
 
 import pytest
 from audidash_core.cli import main
+from audidash_core.findings import Category, Finding, Severity
+from audidash_core.manifest import load_manifest
+from audidash_core.runner import RunInput, RunResult, RunStatus
 from audidash_server.models import Asset, FindingRecord, Run
 from sqlalchemy import select
 from test_cli import REPO_PLUGINS, make_plugin
@@ -110,15 +114,85 @@ def test_demo_requires_login(
     assert _assets(env) == {}
 
 
-def test_demo_official_plugins_need_no_community_override(
-    ready: Env, capsys: pytest.CaptureFixture[str]
+def _stub_run_local(
+    monkeypatch: pytest.MonkeyPatch, *, findings: int = 1, warnings: list[str] | None = None
 ) -> None:
-    """The signed bundled plugins run as-is; closed lab ports just produce no findings."""
+    """Hermetic: never execute a plugin (so nothing touches the real lab ports)."""
+
+    def _fake(plugin_dir: Path, run_input: RunInput, **_kw: object) -> RunResult:
+        manifest = load_manifest(plugin_dir)
+        now = dt.datetime(2026, 11, 25, 12, 0, 5, tzinfo=dt.UTC)
+        items = [
+            Finding(
+                id=f"STUB-{n}",
+                title="Stub",
+                severity=Severity.low,
+                category=Category.misconfiguration,
+                target=run_input.target,
+            )
+            for n in range(findings)
+        ]
+        return RunResult(
+            plugin_id=manifest.id,
+            plugin_version=manifest.version,
+            target=run_input.target,
+            status=RunStatus.ok,
+            reason=None,
+            findings=items,
+            warnings=list(warnings or []),
+            started_at=now,
+            finished_at=now,
+            stderr_tail="",
+            manifest_sha256="0" * 64,
+        )
+
+    monkeypatch.setattr("audidash_core.cli.run_local", _fake)
+
+
+def test_demo_official_plugins_need_no_community_override(
+    ready: Env, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The signed bundled plugins are not community: no override notice (run is stubbed)."""
+    _stub_run_local(monkeypatch)
     capsys.readouterr()
     assert _demo(REPO_PLUGINS) == 0
     out = capsys.readouterr()
     assert "community" not in (out.out + out.err).lower()
     assert len(ready.runs()) == 3
+
+
+def test_demo_plugin_warnings_are_shown_and_fail_the_demo(
+    ready: Env, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_run_local(monkeypatch, findings=0, warnings=["Could not fetch http://127.0.0.1:18080/"])
+    capsys.readouterr()
+    assert _demo(REPO_PLUGINS) == 1
+    out = capsys.readouterr()
+    assert "warning: http-security-headers on lab-web: Could not fetch" in out.err
+    assert "produced no findings" in out.err
+    assert "is the lab running? (docker compose ps)" in out.err
+    assert "Demo complete" not in out.out
+    assert len(ready.runs()) == 3  # results were still uploaded
+
+
+def test_demo_zero_findings_without_warnings_still_fails(
+    ready: Env, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_run_local(monkeypatch, findings=0)
+    assert _demo(REPO_PLUGINS) == 1
+    assert "is the lab running?" in capsys.readouterr().err
+
+
+def test_demo_address_conflict_skips_that_run_with_a_hint(
+    ready: Env, fake_plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ready.add_asset("lab-tls", "10.0.0.9")
+    capsys.readouterr()
+    assert _demo(fake_plugins) == 1
+    err = capsys.readouterr().err
+    assert "'lab-tls' already exists with address '10.0.0.9'" in err
+    assert len(ready.runs()) == 2  # the other two still ran
+    assert "422" not in err
 
 
 def test_demo_reports_a_failed_run_and_exits_nonzero(

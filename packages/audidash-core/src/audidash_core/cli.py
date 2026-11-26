@@ -40,6 +40,7 @@ from audidash_core.scoring import Criticality, ScoredFinding, asset_score, band
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
+EXIT_INTERRUPTED = 130
 
 DEFAULT_PLUGINS_DIR = "plugins"
 PACKAGED_KEY = ("keys", "catalog.pub")
@@ -289,7 +290,10 @@ def _confirm(entry: CatalogEntry, files: dict[str, bytes], assume_yes: bool, inf
         return False
     info.write("\nRun this community plugin? [y/N] ")
     info.flush()
-    return sys.stdin.readline().strip().lower() in {"y", "yes"}
+    try:
+        return sys.stdin.readline().strip().lower() in {"y", "yes"}
+    except (EOFError, KeyboardInterrupt):
+        return False
 
 
 def _report(result: RunResult, criticality: Criticality) -> None:
@@ -460,6 +464,9 @@ def main(argv: list[str] | None = None) -> int:
     except cli_server.ServerCliError as exc:
         _err(f"error: {exc}")
         return EXIT_USAGE if exc.usage else EXIT_FAILED
+    except KeyboardInterrupt:
+        _err("interrupted")
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":  # pragma: no cover
