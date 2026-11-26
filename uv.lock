@@ -186,6 +186,8 @@ source = { editable = "packages/audidash-core" }
 dependencies = [
     { name = "audidash-sdk" },
     { name = "cryptography" },
+    { name = "httpx" },
+    { name = "platformdirs" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
@@ -194,6 +196,8 @@ dependencies = [
 requires-dist = [
     { name = "audidash-sdk", editable = "packages/audidash-sdk" },
     { name = "cryptography", specifier = ">=43" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "platformdirs", specifier = ">=4.14.8" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pyyaml", specifier = ">=6" },
 ]
