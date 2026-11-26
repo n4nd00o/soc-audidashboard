@@ -112,19 +112,9 @@ class CA:
 
         The unencrypted key is for the reverse proxy; the caller must store it 0600.
         """
-        names = [h.strip().removeprefix("[").removesuffix("]") for h in hosts if h.strip()]
-        if not names:
-            raise CAError("at least one host is required")
+        names, sans = _parse_hosts(hosts)
         if not 1 <= days <= SERVER_CERT_MAX_DAYS:
             raise CAError(f"days must be between 1 and {SERVER_CERT_MAX_DAYS}")
-        sans: list[x509.GeneralName] = []
-        for name in names:
-            try:
-                sans.append(x509.IPAddress(ipaddress.ip_address(name)))
-            except ValueError:
-                if not _DNS_NAME.fullmatch(name) or name.rsplit(".", 1)[-1].isdigit():
-                    raise CAError(f"invalid host name: {name!r}") from None
-                sans.append(x509.DNSName(name))
         key = ec.generate_private_key(ec.SECP256R1())
         now = clock.now()
         cert = (
@@ -154,6 +144,61 @@ class CA:
             serialization.NoEncryption(),
         )
         return cert.public_bytes(serialization.Encoding.PEM), key_pem
+
+
+def _parse_hosts(hosts: list[str]) -> tuple[list[str], list[x509.GeneralName]]:
+    """Validated host names (brackets stripped) and their SAN entries (IP or DNS)."""
+    names = [h.strip().removeprefix("[").removesuffix("]") for h in hosts if h.strip()]
+    if not names:
+        raise CAError("at least one host is required")
+    sans: list[x509.GeneralName] = []
+    for name in names:
+        try:
+            sans.append(x509.IPAddress(ipaddress.ip_address(name)))
+        except ValueError:
+            if not _DNS_NAME.fullmatch(name) or name.rsplit(".", 1)[-1].isdigit():
+                raise CAError(f"invalid host name: {name!r}") from None
+            sans.append(x509.DNSName(name))
+    return names, sans
+
+
+def _san_key(name: x509.GeneralName) -> str:
+    if isinstance(name, x509.IPAddress):
+        return f"ip:{name.value}"
+    if isinstance(name, x509.DNSName):
+        return f"dns:{name.value.lower()}"
+    return f"other:{name!r}"
+
+
+def server_cert_problem(
+    cert_pem: bytes, ca_cert: x509.Certificate, hosts: list[str], min_days: int
+) -> str | None:
+    """Why the proxy's server certificate must be reissued, or None if it is still good.
+
+    Checks: signed by `ca_cert`, currently valid for at least `min_days` more days, and a
+    SAN set equal to `hosts` (DNS names compared case-insensitively).
+    """
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem)
+    except ValueError:
+        return "certificado ilegível"
+    try:
+        cert.verify_directly_issued_by(ca_cert)
+    except (ValueError, TypeError, InvalidSignature):
+        return "certificado não foi emitido pela CA atual"
+    now = clock.now()
+    if cert.not_valid_before_utc > now:
+        return "certificado ainda não é válido"
+    if cert.not_valid_after_utc - now < timedelta(days=min_days):
+        return f"certificado expira em menos de {min_days} dias"
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        return "certificado sem SAN"
+    _, wanted = _parse_hosts(hosts)
+    if {_san_key(n) for n in san} != {_san_key(n) for n in wanted}:
+        return "SAN do certificado difere de AUDIDASH_API_HOSTS"
+    return None
 
 
 def _key_usage(*, digital_signature: bool = False, cert_sign: bool = False) -> x509.KeyUsage:

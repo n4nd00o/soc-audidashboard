@@ -13,7 +13,7 @@ vulneráveis.
 
 | Porta (host) | Serviço | Descrição |
 |---|---|---|
-| 8443 | Caddy | Dashboard web + `/enroll`. Certificado da CA interna do Caddy (`tls internal`). `/api/*` responde 404. |
+| 8443 | Caddy | Dashboard web + `/enroll`. Certificado da CA interna do Caddy (`tls internal`). `/api` e `/api/*` respondem 404. |
 | 9443 | Caddy | API dos dispositivos (`/api/*` apenas), **mTLS obrigatório**. Certificado de servidor emitido pela CA interna do AudiDashboard (a CLI fixa `ca.crt`). |
 | 127.0.0.1:18080 | web-noheaders | nginx sem cabeçalhos de segurança e com banner `Server: nginx/1.x`. |
 | 127.0.0.1:18443 | tls-expired | nginx com certificado autoassinado **expirado** (2020-01-02). |
@@ -50,11 +50,14 @@ audidash demo
 - Use `--token=<TOKEN>` (com `=`): tokens podem começar com `-`.
 - O dashboard abre em <https://localhost:8443> (o navegador alertará sobre a CA interna do
   Caddy, que é recriada quando o contêiner reinicia).
-- O certificado da porta 9443 é emitido na primeira inicialização para
-  `AUDIDASH_API_HOSTS` (padrão `localhost,127.0.0.1`), que deve conter o host usado em `--api`.
-  Para reemitir: `docker compose exec server audidash-server issue-server-cert --host ...
-  --out-cert /data/proxy/api.crt --out-key /data/proxy/api.key --force` e
-  `docker compose restart proxy`.
+- Os segredos do `.env` **precisam ser URL-safe** (somente `A-Z a-z 0-9 - _`, como a saída de
+  `token_urlsafe`): o segredo do proxy é inserido sem escape no Caddyfile e a senha do
+  PostgreSQL na URL do banco.
+- O certificado da porta 9443 é emitido pela CA interna para `AUDIDASH_API_HOSTS` (padrão
+  `localhost,127.0.0.1`), que deve conter o host usado em `--api`. A cada inicialização do
+  `server` ele é conferido (`audidash-server check-server-cert`) e reemitido se não for da CA
+  atual, se vencer em menos de 30 dias ou se os SANs diferirem de `AUDIDASH_API_HOSTS`. Depois
+  de mudar a lista: `docker compose up -d --force-recreate server proxy`.
 - Parar e apagar tudo (inclusive dados e a CA): `docker compose down -v`.
 
 ## English
@@ -66,7 +69,7 @@ Docker Compose demo stack: **PostgreSQL** (`db`), the **AudiDashboard server** (
 
 | Host port | Service | Description |
 |---|---|---|
-| 8443 | Caddy | Web dashboard + `/enroll`. Caddy's own internal CA (`tls internal`). `/api/*` returns 404. |
+| 8443 | Caddy | Web dashboard + `/enroll`. Caddy's own internal CA (`tls internal`). `/api` and `/api/*` return 404. |
 | 9443 | Caddy | Device API (`/api/*` only), **mutual TLS required**. Server certificate issued by the AudiDashboard internal CA (the CLI pins `ca.crt`). |
 | 127.0.0.1:18080 | web-noheaders | nginx without security headers, `Server: nginx/1.x` banner. |
 | 127.0.0.1:18443 | tls-expired | nginx with an **expired** self-signed certificate (2020-01-02). |
@@ -107,8 +110,12 @@ audidash demo
 - Pass `--token=<TOKEN>` (with `=`): tokens may start with `-`.
 - The dashboard is at <https://localhost:8443> (browsers warn about Caddy's internal CA, which
   is regenerated whenever the container restarts).
-- The 9443 certificate is issued on first start for `AUDIDASH_API_HOSTS` (default
-  `localhost,127.0.0.1`), which must include the host you pass to `--api`. To reissue:
-  `docker compose exec server audidash-server issue-server-cert --host ... --out-cert
-  /data/proxy/api.crt --out-key /data/proxy/api.key --force`, then `docker compose restart proxy`.
+- Secrets in `.env` **must be URL-safe** (only `A-Z a-z 0-9 - _`, as `token_urlsafe`
+  produces): the proxy secret is substituted raw into the Caddyfile and the PostgreSQL
+  password into the database URL.
+- The 9443 certificate is issued by the internal CA for `AUDIDASH_API_HOSTS` (default
+  `localhost,127.0.0.1`), which must include the host you pass to `--api`. On every `server`
+  start it is checked (`audidash-server check-server-cert`) and reissued if it is not from the
+  current CA, expires within 30 days, or its SANs differ from `AUDIDASH_API_HOSTS`. After
+  changing the list: `docker compose up -d --force-recreate server proxy`.
 - Stop and delete everything (data and CA included): `docker compose down -v`.

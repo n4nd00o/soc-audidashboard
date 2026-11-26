@@ -16,25 +16,30 @@ audidash-server init-ca
 
 mkdir -p "$SHARED_DIR"
 
-issue_api_cert() {
-    # Build "--host H" pairs from the comma-separated list (no globbing, no word surprises).
+with_api_hosts() {
+    # Run "$@" plus one "--host H" pair per comma-separated entry of AUDIDASH_API_HOSTS
+    # (globbing disabled, so entries are passed through verbatim to the CLI's validation).
     set -f
     old_ifs=$IFS
     IFS=,
-    set --
     for host in $API_HOSTS; do
         set -- "$@" --host "$host"
     done
     IFS=$old_ifs
     set +f
-    audidash-server issue-server-cert "$@" \
-        --out-cert "$SHARED_DIR/api.crt" --out-key "$SHARED_DIR/api.key"
+    "$@"
 }
 
-if [ ! -f "$SHARED_DIR/api.crt" ] || [ ! -f "$SHARED_DIR/api.key" ]; then
+# Keep the existing certificate only if it chains to the current CA, is valid for at least
+# 30 more days and its SAN set equals AUDIDASH_API_HOSTS; otherwise issue a new one.
+if [ -f "$SHARED_DIR/api.key" ] && with_api_hosts audidash-server check-server-cert \
+    --cert "$SHARED_DIR/api.crt" --min-days 30; then
+    echo "entrypoint: API listener certificate is current"
+else
     echo "entrypoint: issuing the API listener certificate for: $API_HOSTS"
     rm -f "$SHARED_DIR/api.crt" "$SHARED_DIR/api.key"
-    issue_api_cert
+    with_api_hosts audidash-server issue-server-cert \
+        --out-cert "$SHARED_DIR/api.crt" --out-key "$SHARED_DIR/api.key"
 fi
 
 # Caddy trusts client certificates signed by this CA (client_auth trust_pool).

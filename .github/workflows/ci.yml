@@ -94,8 +94,10 @@ jobs:
 
       - name: Device API is not reachable on the dashboard listener
         run: |
-          code=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost:8443/api/v1/assets)
-          test "$code" = "404" || { echo "expected 404, got $code"; exit 1; }
+          for path in /api /api/ /api/v1/assets /API/v1/assets; do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:8443$path")
+            test "$code" = "404" || { echo "$path: expected 404, got $code"; exit 1; }
+          done
 
       - name: API listener rejects clients without a certificate (TLS handshake)
         run: |
@@ -110,18 +112,38 @@ jobs:
       - name: API listener certificate chains to the internal CA with a localhost SAN
         run: |
           docker compose cp server:/data/proxy/ca.crt "$RUNNER_TEMP/ca.crt"
-          openssl s_client -connect localhost:9443 -servername localhost \
-            -CAfile "$RUNNER_TEMP/ca.crt" -verify_hostname localhost </dev/null 2>/dev/null \
-            | grep -q "Verify return code: 0 (ok)"
+          # Capture first: s_client exits non-zero after the certificate_required alert.
+          out=$(openssl s_client -connect localhost:9443 -servername localhost \
+            -CAfile "$RUNNER_TEMP/ca.crt" -verify_hostname localhost </dev/null 2>/dev/null || true)
+          grep -q "Verify return code: 0 (ok)" <<<"$out"
 
-      - name: Lab targets answer on loopback
+      - name: Lab web target has no security headers and a version banner
         run: |
-          curl -fsS -D - -o /dev/null http://127.0.0.1:18080/ | grep -qi '^server: nginx/1\.'
+          hdrs=$(curl -fsS -D - -o /dev/null http://127.0.0.1:18080/)
+          grep -qi '^server: nginx/1\.' <<<"$hdrs"
+          if grep -qi '^content-security-policy:' <<<"$hdrs"; then exit 1; fi
+
+      - name: Lab TLS target serves an expired certificate
+        run: |
           set +e
           curl -sS -o /dev/null https://localhost:18443/
           rc=$?
           set -e
-          test "$rc" = "60"  # certificate problem (expired)
+          test "$rc" = "60"  # certificate problem
+          served=$(openssl s_client -connect localhost:18443 -servername localhost \
+            </dev/null 2>/dev/null || true)
+          end=$(openssl x509 -noout -enddate <<<"$served")
+          echo "$end"
+          case "$end" in *2020*) ;; *) echo "unexpected notAfter"; exit 1 ;; esac
+          # -checkend 0 succeeds only for a certificate that is still valid now.
+          if openssl x509 -noout -checkend 0 <<<"$served"; then
+            echo "lab certificate is not expired"; exit 1
+          fi
+
+      - name: Lab Redis answers without authentication
+        run: |
+          pong=$(docker compose exec -T redis-open redis-cli ping)
+          test "$pong" = "PONG"
 
       - name: Logs on failure
         if: failure()

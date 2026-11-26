@@ -27,7 +27,7 @@ services:
       - /var/run/postgresql
       - /tmp
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "audidash", "-d", "audidash"]
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "audidash", "-d", "audidash"]
       interval: 5s
       timeout: 5s
       retries: 20
