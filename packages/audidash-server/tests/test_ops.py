@@ -528,3 +528,23 @@ def test_tls_handshake_against_issued_cert(tmp_path: Path) -> None:
     finally:
         listener.close()
         thread.join(timeout=5)
+
+
+def test_purge_keys_runs_on_server_receipt_not_client_clock(
+    ops_env: Settings, db_session: DbSession, frozen_clock: Any
+) -> None:
+    frozen_clock.current = NOW
+    asset = _asset(db_session)
+    # Client clock far in the past, but the server received it yesterday: kept.
+    skewed = _run(asset, NOW - timedelta(days=4000))
+    skewed.received_at = NOW - timedelta(days=1)
+    # Client claims "now", but the server received it 400 days ago: purged.
+    stale = _run(asset, NOW)
+    stale.received_at = NOW - timedelta(days=400)
+    db_session.add_all([skewed, stale])
+    db_session.commit()
+    kept, gone = skewed.id, stale.id
+    assert cli.main(["purge"]) == 0
+    db_session.expire_all()
+    assert [r.id for r in db_session.scalars(select(Run))] == [kept]
+    assert db_session.get(Run, gone) is None

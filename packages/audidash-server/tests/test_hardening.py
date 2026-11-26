@@ -86,6 +86,13 @@ def test_last_admin_guard_locks_rows_with_for_update(db_session: Any) -> None:
         ("https://10.1.2.3:8443/", "https://10.1.2.3:8443", "https://10.1.2.3:9443"),
         ("https://[::1]:8443/", "https://[::1]:8443", "https://[::1]:9443"),
         ("https://[fe80::1]/", "https://[fe80::1]", "https://[fe80::1]:9443"),
+        # Behind Caddy the app sees plain http; the CLI only accepts https:// URLs.
+        (
+            "http://audi.example.org:8443/",
+            "https://audi.example.org:8443",
+            "https://audi.example.org:9443",
+        ),
+        ("http://localhost/", "https://localhost", "https://localhost:9443"),
     ],
 )
 def test_default_urls_accepts_plain_hosts(base: str, dashboard: str, api: str) -> None:

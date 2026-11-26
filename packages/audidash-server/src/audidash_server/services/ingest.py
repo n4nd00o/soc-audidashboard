@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from audidash_core.catalog import Trust
@@ -35,6 +36,9 @@ AUTO_RESOLVABLE = (FindingStatus.open, FindingStatus.acknowledged)
 _PLUGIN_ID = re.compile(r"[a-z0-9][a-z0-9-]{2,63}")
 _PLUGIN_VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# Plausibility window for client-reported run times (client clocks may be skewed, not absurd).
+EARLIEST_RUN_TIME = datetime(2000, 1, 1, tzinfo=UTC)
+MAX_CLOCK_AHEAD = timedelta(hours=24)
 
 
 class IngestError(Exception):
@@ -59,7 +63,7 @@ def _replay(db: DbSession, run_id: uuid.UUID, device: Device) -> IngestOutcome |
     return IngestOutcome(created=False, summary=dict(existing.ingest_summary))
 
 
-def _validate(result: RunResult, asset: Asset) -> Trust | None:
+def _validate(result: RunResult, asset: Asset, now: datetime) -> Trust | None:
     accepted = {asset.name} | ({asset.address} if asset.address else set())
     if result.target not in accepted:
         raise IngestError(422, "result target does not match the asset's address or name")
@@ -78,6 +82,14 @@ def _validate(result: RunResult, asset: Asset) -> Trust | None:
         raise IngestError(422, "manifest_sha256 must be 64 lowercase hex characters")
     if result.started_at.tzinfo is None or result.finished_at.tzinfo is None:
         raise IngestError(422, "started_at/finished_at must carry a timezone")
+    latest = now + MAX_CLOCK_AHEAD
+    for moment in (result.started_at, result.finished_at):
+        if moment < EARLIEST_RUN_TIME or moment > latest:
+            raise IngestError(
+                422,
+                "started_at/finished_at must lie between 2000-01-01 and 24 h after the "
+                "server's current time",
+            )
     try:
         return Trust(result.trust) if result.trust is not None else None
     except ValueError:
@@ -109,8 +121,8 @@ def ingest_run(
     asset = db.scalars(select(Asset).where(Asset.name == asset_name)).first()
     if asset is None:
         raise IngestError(422, f"unknown asset {asset_name[:128]!r}")
-    trust = _validate(result, asset)
     now = clock.now()
+    trust = _validate(result, asset, now)
 
     db.add(
         Run(
