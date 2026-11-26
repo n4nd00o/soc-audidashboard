@@ -40,9 +40,9 @@ from audidash_server.web import device_queries as dq
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,64}$")
 
 
-def _err(msg: str) -> int:
+def _err(msg: str, code: int = 1) -> int:
     print(f"erro: {msg}", file=sys.stderr)
-    return 1
+    return code
 
 
 def _load_settings() -> Settings:
@@ -58,7 +58,36 @@ def _load_settings() -> Settings:
     return settings
 
 
-def create_admin(username: str) -> int:
+def _read_passwords(username: str, *, from_stdin: bool) -> str | int:
+    """The new password (prompted twice, or one line of stdin) or an exit code on failure."""
+    try:
+        if from_stdin:
+            line = sys.stdin.readline()
+            if not line:
+                return _err("entrada encerrada: nenhuma senha recebida em stdin.", 2)
+            password = line.rstrip("\r\n")
+        else:
+            password = getpass.getpass("Senha: ")
+            if getpass.getpass("Confirme a senha: ") != password:
+                return _err("as senhas não conferem.")
+    except (EOFError, KeyboardInterrupt):
+        return _err("entrada interrompida; nada foi alterado.", 2)
+    try:
+        validate_password(password, username)
+    except WeakPasswordError as exc:
+        return _err(f"senha rejeitada: {exc}")
+    return password
+
+
+def _open_secret_file(path: Path) -> int:
+    """Create the TOTP secret file (0600, never overwriting) BEFORE the account exists."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    return os.open(path, flags, 0o600)
+
+
+def create_admin(
+    username: str, *, password_stdin: bool = False, totp_secret_out: Path | None = None
+) -> int:
     if not USERNAME_RE.match(username):
         return _err("nome de usuário inválido (3-64 caracteres: letras, números, _ . -).")
     try:
@@ -66,46 +95,65 @@ def create_admin(username: str) -> int:
     except ValueError as exc:
         return _err(str(exc))
 
-    password = getpass.getpass("Senha: ")
-    if getpass.getpass("Confirme a senha: ") != password:
-        return _err("as senhas não conferem.")
-    try:
-        validate_password(password, username)
-    except WeakPasswordError as exc:
-        return _err(f"senha rejeitada: {exc}")
+    password = _read_passwords(username, from_stdin=password_stdin)
+    if not isinstance(password, str):
+        return password
 
-    engine = make_engine(settings.database_url)
+    secret_fd: int | None = None
+    if totp_secret_out is not None:
+        try:
+            secret_fd = _open_secret_file(totp_secret_out)
+        except OSError as exc:
+            return _err(f"não foi possível criar {totp_secret_out}: {exc.strerror or exc}")
+    created = False
     try:
-        if settings.dev_mode and settings.database_url.startswith("sqlite"):
-            init_db(engine)  # same dev convenience as the app; production uses Alembic
-        with DbSession(engine) as db:
-            if db.scalars(select(User).where(User.username == username)).first() is not None:
-                return _err(f"o usuário '{username}' já existe; nada foi alterado.")
-            secret = totp_secret_new()
-            user = User(
-                id=uuid.uuid4(),
-                username=username,
-                password_hash=hash_password(password),
-                totp_secret_enc=encrypt_totp_secret(secret, settings.secret_key.get_secret_value()),
-                role=Role.admin,
-                failed_logins=0,
-                created_at=clock.now(),
-            )
-            db.add(user)
-            audit.record(
-                db,
-                action="user.create",
-                actor_user_id=None,
-                actor_device_id=None,
-                target=username,
-                details={"role": Role.admin.value, "via": "cli"},
-            )
-            db.commit()
+        secret = totp_secret_new()
+        engine = make_engine(settings.database_url)
+        try:
+            if settings.dev_mode and settings.database_url.startswith("sqlite"):
+                init_db(engine)  # same dev convenience as the app; production uses Alembic
+            with DbSession(engine) as db:
+                if db.scalars(select(User).where(User.username == username)).first() is not None:
+                    return _err(f"o usuário '{username}' já existe; nada foi alterado.")
+                user = User(
+                    id=uuid.uuid4(),
+                    username=username,
+                    password_hash=hash_password(password),
+                    totp_secret_enc=encrypt_totp_secret(
+                        secret, settings.secret_key.get_secret_value()
+                    ),
+                    role=Role.admin,
+                    failed_logins=0,
+                    created_at=clock.now(),
+                )
+                db.add(user)
+                audit.record(
+                    db,
+                    action="user.create",
+                    actor_user_id=None,
+                    actor_device_id=None,
+                    target=username,
+                    details={"role": Role.admin.value, "via": "cli"},
+                )
+                if secret_fd is not None:
+                    with os.fdopen(secret_fd, "w", encoding="ascii") as fh:
+                        secret_fd = None
+                        fh.write(secret + "\n")
+                db.commit()
+                created = True
+        finally:
+            engine.dispose()
     finally:
-        engine.dispose()
+        if secret_fd is not None:
+            os.close(secret_fd)
+        if totp_secret_out is not None and not created:
+            totp_secret_out.unlink(missing_ok=True)
 
-    uri = provisioning_uri(secret, username)
     print(f"Administrador '{username}' criado.")
+    if totp_secret_out is not None:
+        print(f"Chave TOTP gravada em {totp_secret_out} (não exibida).")
+        return 0
+    uri = provisioning_uri(secret, username)
     print("Cadastre o segundo fator (TOTP) no aplicativo autenticador:")
     print(uri)
     try:
@@ -340,6 +388,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     admin = sub.add_parser("create-admin", help="create an admin account (interactive)")
     admin.add_argument("--username", required=True)
+    admin.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="for automation: read the password as one line of stdin instead of prompting",
+    )
+    admin.add_argument(
+        "--totp-secret-out",
+        type=Path,
+        metavar="FILE",
+        help="for automation: write the TOTP secret to FILE (new, mode 0600, never overwritten) "
+        "instead of printing it",
+    )
     audit_cmd = sub.add_parser("audit", help="audit log tools")
     audit_sub = audit_cmd.add_subparsers(dest="audit_command", required=True)
     audit_sub.add_parser("verify", help="verify the audit hash chain")
@@ -371,7 +431,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "create-admin":
-        return create_admin(args.username)
+        return create_admin(
+            args.username,
+            password_stdin=args.password_stdin,
+            totp_secret_out=args.totp_secret_out,
+        )
     if args.command == "audit" and args.audit_command == "verify":
         return audit_verify()
     if args.command == "purge":

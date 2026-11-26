@@ -9,6 +9,7 @@ import json
 import re
 import sys
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,10 +19,11 @@ import httpx
 from audidash_core.cli_format import clean_line, table
 from audidash_core.client import config as client_config
 from audidash_core.client import identity
-from audidash_core.client.api import ApiClient, AssetInfo, enroll_device
+from audidash_core.client.api import ApiClient, ApiError, AssetInfo, enroll_device
 from audidash_core.client.config import ClientConfig, ClientError
+from audidash_core.manifest import TargetType
 from audidash_core.runner import RunResult
-from audidash_core.scoring import band
+from audidash_core.scoring import Criticality, band
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
@@ -57,6 +59,14 @@ def _https_url(raw: str, option: str) -> str:
     if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
         raise ServerCliError(f"{option} must be an https:// URL without credentials", usage=True)
     return raw.rstrip("/")
+
+
+def _prompt(read: Callable[[], str]) -> str:
+    """Run one interactive prompt; Ctrl-C / closed stdin become a clean one-line error."""
+    try:
+        return read()
+    except (EOFError, KeyboardInterrupt):
+        raise ServerCliError("input cancelled or closed; nothing was changed") from None
 
 
 def _directory() -> Path:
@@ -112,7 +122,7 @@ def cmd_enroll(args: argparse.Namespace) -> int:
             f"this device is already enrolled ({directory}); use --force to replace the identity"
         )
 
-    token = args.token or getpass.getpass("Enrolment token: ").strip()
+    token = args.token or _prompt(lambda: getpass.getpass("Enrolment token: ")).strip()
     if not token:
         raise ServerCliError("an enrolment token is required", usage=True)
     key = identity.generate_key()
@@ -151,14 +161,26 @@ def cmd_enroll(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- login / assets
 
 
+def _stdin_line(what: str) -> str:
+    line = sys.stdin.readline()
+    if not line:
+        raise ServerCliError(f"{what} expected on stdin but it was empty")
+    return line.rstrip("\r\n")
+
+
 def cmd_login(args: argparse.Namespace) -> int:
     directory = _directory()
     config = _load(directory)
-    username = input("Username: ").strip()
+    if args.password_stdin and not args.username:
+        raise ServerCliError("--password-stdin needs --username", usage=True)
+    username = (args.username or _prompt(lambda: input("Username: "))).strip()
     if not username:
         raise ServerCliError("username is required", usage=True)
-    password = getpass.getpass("Password: ")
-    totp = input("TOTP code: ").strip()
+    if args.password_stdin:
+        password = _stdin_line("password")
+    else:
+        password = _prompt(lambda: getpass.getpass("Password: "))
+    totp = (args.totp_code or _prompt(lambda: input("TOTP code: "))).strip()
     try:
         with ApiClient(config, make_transport(directory)) as client:
             grant = client.login(username, password, totp)
@@ -182,6 +204,43 @@ def cmd_assets(args: argparse.Namespace) -> int:
     rows = [[a.name, a.address or "-", a.asset_type.value, a.criticality.value] for a in assets]
     print(table(["NAME", "ADDRESS", "TYPE", "CRITICALITY"], rows))
     return 0
+
+
+@dataclass(frozen=True)
+class AssetSpec:
+    name: str
+    address: str
+    asset_type: TargetType
+    criticality: Criticality
+    tags: tuple[str, ...] = ()
+
+
+def ensure_assets(specs: list[AssetSpec]) -> dict[str, bool]:
+    """Create each missing asset (409 = it already exists); name -> True when created."""
+    created: dict[str, bool] = {}
+    try:
+        with _authed_client(_directory()) as client:
+            for spec in specs:
+                try:
+                    client.create_asset(
+                        name=spec.name,
+                        address=spec.address,
+                        asset_type=spec.asset_type,
+                        criticality=spec.criticality,
+                        tags=list(spec.tags),
+                    )
+                    created[spec.name] = True
+                except ApiError as exc:
+                    if exc.status != 409:
+                        raise
+                    created[spec.name] = False
+    except ClientError as exc:
+        raise ServerCliError(str(exc)) from None
+    return created
+
+
+def dashboard_url() -> str:
+    return _load(_directory()).dashboard_url
 
 
 # ---------------------------------------------------------------- verified allowlist
@@ -288,6 +347,18 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     enroll.set_defaults(func=cmd_enroll)
 
     login = sub.add_parser("login", help="log in (username, password, TOTP) to get an API token")
+    login.add_argument("--username", help="skip the username prompt")
+    login.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="for automation: read the password as one line of stdin (needs --username)",
+    )
+    login.add_argument(
+        "--totp-code",
+        metavar="CODE",
+        help="for automation: one-time code given on the command line instead of a prompt "
+        "(acceptable only because the code expires within seconds)",
+    )
     login.set_defaults(func=cmd_login)
 
     assets = sub.add_parser("assets", help="list the server's assets")

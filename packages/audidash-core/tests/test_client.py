@@ -9,6 +9,7 @@ against a local ``ssl`` server.
 import datetime as dt
 import getpass
 import hashlib
+import io
 import json
 import ssl
 import sys
@@ -784,3 +785,76 @@ def test_api_client_verified_returns_set(tmp_path: Path) -> None:
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
     with ApiClient(config, transport, access_token="t") as client:  # noqa: S106
         assert client.verified() == frozenset({"a" * 64, "b" * 64})
+
+
+# ------------------------------------------------------------------ automation flags / interrupts
+
+
+def test_login_password_stdin_and_totp_code(
+    env: Env, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env.enroll()
+    monkeypatch.setattr("sys.stdin", io.StringIO(PASSWORD + "\n"))
+    monkeypatch.setattr(getpass, "getpass", lambda _p="": pytest.fail("must not prompt"))
+    monkeypatch.setattr("builtins.input", lambda _p="": pytest.fail("must not prompt"))
+    args = ["login", "--username", "alice", "--password-stdin", "--totp-code", env.totp()]
+    assert main(args) == 0
+    assert (env.config_dir / "token.json").exists()
+    captured = capsys.readouterr()
+    assert PASSWORD not in captured.out + captured.err
+
+
+def test_login_password_stdin_needs_username(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    env.enroll()
+    monkeypatch.setattr("sys.stdin", io.StringIO(PASSWORD + "\n"))
+    assert main(["login", "--password-stdin", "--totp-code", env.totp()]) == 2
+
+
+def test_login_password_stdin_empty_is_clean(
+    env: Env, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env.enroll()
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    args = ["login", "--username", "alice", "--password-stdin", "--totp-code", env.totp()]
+    assert main(args) == 1
+    assert "Traceback" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("exc", [EOFError, KeyboardInterrupt])
+@pytest.mark.parametrize("which", ["login-user", "login-password", "login-totp", "enroll"])
+def test_interrupted_prompts_are_one_clean_line(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    exc: type[BaseException],
+    which: str,
+) -> None:
+    def _boom(_prompt: str = "") -> str:
+        raise exc
+
+    if which == "enroll":
+        monkeypatch.setattr(getpass, "getpass", _boom)
+        args = env.enroll_args("--ca-fingerprint", env.ca_fingerprint())
+        code = main([a for a in args if not a.startswith("--token")])
+    else:
+        env.enroll()
+
+        def _input(prompt: str = "") -> str:
+            if (which == "login-user" and prompt.startswith("Username")) or (
+                which == "login-totp" and prompt.startswith("TOTP")
+            ):
+                raise exc
+            return env.user if prompt.startswith("Username") else env.totp()
+
+        def _getpass(_prompt: str = "") -> str:
+            if which == "login-password":
+                raise exc
+            return PASSWORD
+
+        monkeypatch.setattr("builtins.input", _input)
+        monkeypatch.setattr(getpass, "getpass", _getpass)
+        code = main(["login"])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "Traceback" not in err
+    assert not (env.config_dir / "token.json").exists()
