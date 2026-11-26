@@ -6,6 +6,7 @@ presents ``device.crt``/``device.key``. Tests (and nothing else) inject an httpx
 
 from __future__ import annotations
 
+import re
 import ssl
 from datetime import datetime
 from typing import Any
@@ -19,6 +20,7 @@ from audidash_core.manifest import TargetType
 from audidash_core.scoring import Criticality
 
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 class ApiError(ClientError):
@@ -202,3 +204,13 @@ class ApiClient:
             return UploadSummary.model_validate(data)
         except ValidationError:
             raise ApiError("malformed server response") from None
+
+    def verified(self) -> frozenset[str]:
+        """Manifest hashes an admin verified (GET /api/v1/verified)."""
+        data = self._request("GET", "/api/v1/verified")
+        items = data.get("manifest_sha256") if isinstance(data, dict) else None
+        if not isinstance(items, list) or not all(
+            isinstance(i, str) and _SHA256_HEX.fullmatch(i) for i in items
+        ):
+            raise ApiError("malformed server response")
+        return frozenset(items)

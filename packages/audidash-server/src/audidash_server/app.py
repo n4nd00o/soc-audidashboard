@@ -17,6 +17,7 @@ from audidash_server.api.auth_token import router as auth_token_router
 from audidash_server.api.enroll import router as enroll_router
 from audidash_server.api.errors import validation_error_handler
 from audidash_server.api.ingest import router as ingest_router
+from audidash_server.api.verified import router as verified_router
 from audidash_server.auth.passwords import dummy_hash
 from audidash_server.auth.ratelimit import LoginRateLimiter
 from audidash_server.auth.routes import router as auth_router
@@ -25,8 +26,13 @@ from audidash_server.db import init_db, make_engine, make_sessionmaker
 from audidash_server.security_headers import SecurityHeadersMiddleware
 from audidash_server.settings import Settings
 from audidash_server.web.routes_assets import router as web_assets_router
+from audidash_server.web.routes_audit import router as web_audit_router
+from audidash_server.web.routes_devices import router as web_devices_router
 from audidash_server.web.routes_findings import router as web_findings_router
 from audidash_server.web.routes_overview import router as overview_router
+from audidash_server.web.routes_plugins import router as web_plugins_router
+from audidash_server.web.routes_runs import router as web_runs_router
+from audidash_server.web.routes_users import router as web_users_router
 
 PACKAGE_DIR = Path(__file__).parent
 STATIC_DIR = PACKAGE_DIR / "static"
@@ -70,10 +76,16 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(overview_router)
     app.include_router(web_assets_router)
     app.include_router(web_findings_router)
+    app.include_router(web_runs_router)
+    app.include_router(web_plugins_router)
+    app.include_router(web_devices_router)
+    app.include_router(web_users_router)
+    app.include_router(web_audit_router)
     app.include_router(enroll_router)
     app.include_router(auth_token_router)
     app.include_router(assets_router)
     app.include_router(ingest_router)
+    app.include_router(verified_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

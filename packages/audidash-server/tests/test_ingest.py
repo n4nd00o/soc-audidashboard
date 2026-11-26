@@ -7,7 +7,7 @@ from audidash_server.models import Asset, AuditEntry, FindingEvent, FindingRecor
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-PLUGIN = "audidash.linux-baseline"
+PLUGIN = "linux-baseline"
 ASSET = {"name": "srv1", "address": "srv1.local", "asset_type": "linux", "criticality": "high"}
 
 
@@ -186,7 +186,7 @@ def test_non_ok_run_does_not_auto_resolve(api: Any, status: str) -> None:
 
 def test_auto_resolve_scoped_to_plugin(api: Any) -> None:
     _upload(api, _result([_finding("A-1")]))
-    r = _upload(api, _result([_finding("Z-9")], plugin_id="audidash.other"))
+    r = _upload(api, _result([_finding("Z-9")], plugin_id="other-plugin"))
     assert r.json()["auto_resolved"] == 0
     assert _by_finding_id(api.client)["A-1"].status is FindingStatus.open
 
@@ -225,3 +225,41 @@ def test_oversized_chunked_body_rejected_while_reading(api: Any) -> None:
     r = api.client.post("/api/v1/runs", content=chunks(), headers=headers)
     assert "content-length" not in {k.lower() for k in r.request.headers}
     assert r.status_code == 413
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("plugin_id", "Bad_Id"),
+        ("plugin_id", "ab"),
+        ("plugin_id", "-leading-dash"),
+        ("plugin_id", "audidash.dotted"),
+        ("plugin_id", "a" * 65),
+        ("plugin_id", "evil\x07-plugin"),
+        ("plugin_version", ""),
+        ("plugin_version", "1.0 beta"),
+        ("plugin_version", "1.0\x00"),
+        ("plugin_version", "1.0\n"),
+        ("plugin_version", "9" * 65),
+        ("manifest_sha256", "A" * 64),
+        ("manifest_sha256", "a" * 63),
+        ("manifest_sha256", "g" * 64),
+        ("manifest_sha256", "a" * 63 + "\n"),
+        ("trust", "godlike"),
+    ],
+)
+def test_run_metadata_validated(api: Any, field: str, value: str) -> None:
+    result = _result([_finding("A-1")])
+    result[field] = value
+    r = _upload(api, result)
+    assert r.status_code == 422
+    assert field in r.json()["detail"]
+    assert _rows(api.client, Run) == [] and _rows(api.client, FindingRecord) == []
+
+
+def test_run_metadata_accepts_semverish_and_null_hash(api: Any) -> None:
+    result = _result([_finding("A-1")])
+    result["plugin_version"] = "1.2.0-rc.1+build.5"
+    result["manifest_sha256"] = None
+    result["trust"] = None
+    assert _upload(api, result).status_code in (200, 201)

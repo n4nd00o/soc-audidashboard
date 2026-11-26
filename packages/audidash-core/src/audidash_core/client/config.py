@@ -2,15 +2,17 @@
 
 Files live in ``platformdirs.user_config_dir("audidash")``: ``device.key`` (never leaves the
 machine), ``device.crt``, ``ca.crt`` (the pinned trust root), ``server.json`` and
-``token.json``. Secrets are written 0600 inside a 0700 directory on POSIX; on Windows the
-files inherit the user-profile ACL.
+``token.json`` plus ``verified.json`` (cached plugin allowlist). Secrets are written 0600
+inside a 0700 directory on POSIX; on Windows the files inherit the user-profile ACL.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -146,3 +148,25 @@ def load_token(directory: Path) -> str:
     if not token or expires_at <= utcnow():
         raise SessionExpiredError
     return token
+
+
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+def save_verified(directory: Path, hashes: Iterable[str]) -> None:
+    """Cache the server's verified-manifest allowlist (last successful sync)."""
+    ensure_private_dir(directory)
+    body = {"manifest_sha256": sorted(set(hashes))}
+    write_private(directory / "verified.json", json.dumps(body).encode("utf-8"))
+
+
+def load_verified(directory: Path) -> frozenset[str]:
+    """Cached allowlist; empty when missing or unreadable (never an error)."""
+    try:
+        body = json.loads((directory / "verified.json").read_text(encoding="utf-8"))
+        items = body["manifest_sha256"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return frozenset()
+    if not isinstance(items, list):
+        return frozenset()
+    return frozenset(i for i in items if isinstance(i, str) and _SHA256_HEX.fullmatch(i))

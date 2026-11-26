@@ -8,6 +8,7 @@ against a local ``ssl`` server.
 
 import datetime as dt
 import getpass
+import hashlib
 import json
 import ssl
 import sys
@@ -26,7 +27,7 @@ from audidash_core import cli_server
 from audidash_core.cli import main
 from audidash_core.client import config as client_config
 from audidash_core.client import identity
-from audidash_core.client.api import ApiClient
+from audidash_core.client.api import ApiClient, ApiError
 from audidash_core.client.config import ClientConfig, ClientError
 from audidash_core.manifest import TargetType
 from audidash_core.scoring import Criticality
@@ -35,7 +36,7 @@ from audidash_server.app import create_app
 from audidash_server.auth.passwords import hash_password
 from audidash_server.auth.totp import encrypt_totp_secret, totp_secret_new
 from audidash_server.ca import load_or_create_ca
-from audidash_server.models import Asset, Role, Run, User
+from audidash_server.models import Asset, Role, Run, User, VerifiedPlugin
 from audidash_server.services.enrollment import create_enrollment_token
 from audidash_server.settings import Settings
 from cryptography import x509
@@ -616,3 +617,102 @@ def test_enroll_prompts_for_missing_token(env: Env, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(getpass, "getpass", lambda _prompt="": env.new_token())
     args = env.enroll_args("--ca-fingerprint", env.ca_fingerprint())
     assert main([a for a in args if not a.startswith("--token")]) == 0
+
+
+# ------------------------------------------------------------------ plugins list --sync-verified
+
+
+def _list(plugins: Path, *extra: str) -> int:
+    return main(["plugins", "list", "--plugins-dir", str(plugins), *extra])
+
+
+def _allow(env: Env, plugins: Path) -> str:
+    digest = hashlib.sha256((plugins / "demo-plugin" / "plugin.yaml").read_bytes()).hexdigest()
+    with env.app_client.app.state.sessionmaker() as s:  # type: ignore[attr-defined]
+        s.add(
+            VerifiedPlugin(
+                manifest_sha256=digest, plugin_id="demo-plugin", version="0.1.0", approved_at=NOW
+            )
+        )
+        s.commit()
+    return digest
+
+
+def test_sync_verified_marks_allowlisted_plugin_and_caches(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    digest = _allow(ready, plugins)
+    capsys.readouterr()
+    assert _list(plugins) == 0
+    assert "community" in capsys.readouterr().out  # without the flag nothing changes
+    assert _list(plugins, "--sync-verified") == 0
+    assert "verified" in capsys.readouterr().out
+    cache = json.loads((ready.config_dir / "verified.json").read_text())
+    assert cache == {"manifest_sha256": [digest]}
+    assert _list(plugins) == 0  # the cache is for `run`; plain list stays unchanged
+    assert "community" in capsys.readouterr().out
+
+
+def test_run_uses_cached_allowlist(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _allow(ready, plugins)
+    capsys.readouterr()
+    assert _run(plugins, "--json") == 0
+    assert json.loads(capsys.readouterr().out)["trust"] == "community"
+    assert _list(plugins, "--sync-verified") == 0
+    capsys.readouterr()
+    assert _run(plugins, "--json") == 0
+    assert json.loads(capsys.readouterr().out)["trust"] == "verified"
+
+
+def test_tampered_plugin_is_not_verified_by_cached_hash(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _allow(ready, plugins)
+    assert _list(plugins, "--sync-verified") == 0
+    (plugins / "demo-plugin" / "run.py").write_bytes(b"print('evil')\n")
+    capsys.readouterr()
+    assert _list(plugins) == 0
+    assert "verified" not in capsys.readouterr().out.replace("unverified", "")
+
+
+def test_sync_verified_needs_login_and_keeps_cache(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    digest = _allow(ready, plugins)
+    assert _list(plugins, "--sync-verified") == 0
+    (ready.config_dir / "token.json").unlink()
+    capsys.readouterr()
+    assert _list(plugins, "--sync-verified") == 1
+    assert "run `audidash login`" in capsys.readouterr().err
+    cache = json.loads((ready.config_dir / "verified.json").read_text())
+    assert cache == {"manifest_sha256": [digest]}
+
+
+def test_corrupt_cache_is_ignored(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (ready.config_dir / "verified.json").write_text("{not json", encoding="utf-8")
+    capsys.readouterr()
+    assert _run(plugins, "--json") == 0
+    assert json.loads(capsys.readouterr().out)["trust"] == "community"
+
+
+@pytest.mark.parametrize("body", [{"manifest_sha256": ["NOT-HEX"]}, {"other": []}, ["x"]])
+def test_api_client_rejects_malformed_verified_response(tmp_path: Path, body: Any) -> None:
+    config = ClientConfig(tmp_path, "https://h", "https://h", "d")
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=body))
+    with (
+        ApiClient(config, transport, access_token="t") as client,  # noqa: S106
+        pytest.raises(ApiError, match="malformed"),
+    ):
+        client.verified()
+
+
+def test_api_client_verified_returns_set(tmp_path: Path) -> None:
+    config = ClientConfig(tmp_path, "https://h", "https://h", "d")
+    payload = {"manifest_sha256": ["a" * 64, "b" * 64]}
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    with ApiClient(config, transport, access_token="t") as client:  # noqa: S106
+        assert client.verified() == frozenset({"a" * 64, "b" * 64})

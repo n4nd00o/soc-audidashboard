@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import secrets
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from pydantic import SecretStr, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,27 @@ class Settings(BaseSettings):
     session_idle_minutes: int = 30
     session_absolute_hours: int = 12
     retention_days: int = 365
+    # Public URLs shown in the device-enrolment command; empty = derive from the request.
+    public_dashboard_url: str = ""
+    public_api_url: str = ""
+
+    @field_validator("public_dashboard_url", "public_api_url")
+    @classmethod
+    def _https_url_or_empty(cls, value: str) -> str:
+        if not value:
+            return value
+        parts = urlsplit(value)
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+            or any(ch.isspace() or ord(ch) < 32 for ch in value)
+        ):
+            raise ValueError("must be an https:// URL without credentials, query or whitespace")
+        return value.rstrip("/")
 
     @model_validator(mode="after")
     def _fill_dev_secrets(self) -> Settings:

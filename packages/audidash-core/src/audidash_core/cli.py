@@ -107,13 +107,17 @@ def _load_key(args: argparse.Namespace) -> Ed25519PublicKey | None:
         return None
 
 
-def _catalog(args: argparse.Namespace) -> list[CatalogEntry]:
+def _catalog(
+    args: argparse.Namespace, verified: frozenset[str] = frozenset()
+) -> list[CatalogEntry]:
     plugins_dir = _plugins_dir(args)
-    return load_catalog(plugins_dir, _load_key(args))
+    return load_catalog(plugins_dir, _load_key(args), verified)
 
 
-def _find(args: argparse.Namespace, plugin_id: str) -> CatalogEntry:
-    matches = [e for e in _catalog(args) if e.manifest.id == plugin_id]
+def _find(
+    args: argparse.Namespace, plugin_id: str, verified: frozenset[str] = frozenset()
+) -> CatalogEntry:
+    matches = [e for e in _catalog(args, verified) if e.manifest.id == plugin_id]
     if len(matches) > 1:
         dirs = ", ".join(str(e.path) for e in matches)
         raise UsageError(f"ambiguous plugin id {plugin_id!r}: found in {dirs}")
@@ -172,7 +176,8 @@ def _parse_params(manifest: PluginManifest, raw: list[str]) -> dict[str, object]
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    entries = _catalog(args)
+    verified = cli_server.sync_verified() if args.sync_verified else frozenset()
+    entries = _catalog(args, verified)
     rows = [
         [
             e.manifest.id,
@@ -306,7 +311,7 @@ def _report(result: RunResult, criticality: Criticality) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    entry = _find(args, args.id)
+    entry = _find(args, args.id, cli_server.cached_verified())
     manifest = entry.manifest
     target_type = TargetType(args.target_type) if args.target_type else manifest.targets[0]
     if target_type not in manifest.targets:
@@ -375,6 +380,13 @@ def _build_parser() -> argparse.ArgumentParser:
     plugins = sub.add_parser("plugins", help="list, inspect, hash and validate plugins")
     psub = plugins.add_subparsers(dest="plugins_command", required=True)
     p_list = psub.add_parser("list", parents=[common], help="list available plugins")
+    p_list.add_argument(
+        "--sync-verified",
+        action="store_true",
+        help="fetch the server's verified-plugin allowlist (needs enrol + login); a plugin whose "
+        "plugin.yaml hash is listed and whose files are intact shows as 'verified'. The list is "
+        "cached in the config dir (verified.json) and `run` uses that cache when present",
+    )
     p_list.set_defaults(func=_cmd_list)
     p_show = psub.add_parser("show", parents=[common], help="show a plugin and its full source")
     p_show.add_argument("id")

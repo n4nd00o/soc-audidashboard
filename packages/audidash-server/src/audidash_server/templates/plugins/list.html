@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Plugins · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="page-head"><h1>Plugins</h1></div>
+  <p class="hint">Plugins vistos nas execuções enviadas, agrupados por manifesto. A confiança exibida é a declarada pelo cliente; somente os manifestos da lista de verificados são distribuídos aos dispositivos.</p>
+  {% if groups %}
+  <table class="data plugins">
+    <thead>
+      <tr>
+        <th scope="col">Plugin</th><th scope="col">Versão</th><th scope="col">Manifesto (SHA-256)</th>
+        <th scope="col">Confiança informada</th><th scope="col">Execuções</th><th scope="col">Última execução</th>
+        <th scope="col">Verificado</th>{% if is_admin %}<th scope="col">Ações</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in groups %}
+      <tr>
+        <td data-label="Plugin">{{ g.plugin_id }}</td>
+        <td data-label="Versão">{{ g.version }}</td>
+        <td data-label="Manifesto (SHA-256)"><code>{{ g.manifest_sha256 or "—" }}</code></td>
+        <td data-label="Confiança informada">{% for t in g.trusts %}{{ trust_labels[t] }}{% if not loop.last %}, {% endif %}{% endfor %}{% if g.unreported %}{% if g.trusts %}, {% endif %}não informada{% endif %}</td>
+        <td data-label="Execuções">{{ g.runs }}</td>
+        <td data-label="Última execução">{{ g.last_run_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td data-label="Verificado">{{ "Sim" if g.verified else "Não" }}</td>
+        {% if is_admin %}
+        <td data-label="Ações" class="row-actions">
+          {% if g.manifest_sha256 %}
+          <form method="post" action="/plugins/{{ 'unverify' if g.verified else 'verify' }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="manifest_sha256" value="{{ g.manifest_sha256 }}">
+            <button type="submit">{{ "Remover verificação" if g.verified else "Marcar como verificado" }}</button>
+          </form>
+          {% else %}—{% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">Nenhum plugin apareceu em execuções ainda.</p>
+  {% endif %}
+</section>
+<section class="card">
+  <div class="page-head"><h2>Lista de verificados</h2></div>
+  {% if allowlist %}
+  <table class="data allowlist">
+    <thead>
+      <tr>
+        <th scope="col">Plugin</th><th scope="col">Versão</th><th scope="col">Manifesto (SHA-256)</th>
+        <th scope="col">Aprovado por</th><th scope="col">Aprovado em</th>{% if is_admin %}<th scope="col">Ações</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row, approver in allowlist %}
+      <tr>
+        <td data-label="Plugin">{{ row.plugin_id }}</td>
+        <td data-label="Versão">{{ row.version }}</td>
+        <td data-label="Manifesto (SHA-256)"><code>{{ row.manifest_sha256 }}</code></td>
+        <td data-label="Aprovado por">{{ approver or "—" }}</td>
+        <td data-label="Aprovado em">{{ row.approved_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        {% if is_admin %}
+        <td data-label="Ações" class="row-actions">
+          <form method="post" action="/plugins/unverify">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="manifest_sha256" value="{{ row.manifest_sha256 }}">
+            <button type="submit">Remover</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">Nenhum manifesto verificado.</p>
+  {% endif %}
+</section>
+{% endblock %}
