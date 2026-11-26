@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from audidash_server.api.deps import Db, Writer
 from audidash_server.api.errors import sanitized_errors
 from audidash_server.services.ingest import IngestError, ingest_run
+from audidash_server.textguard import nul_path
 
 router = APIRouter(prefix="/api/v1")
 
@@ -58,6 +59,10 @@ async def upload_run(
         body = IngestRequest.model_validate_json(raw)
     except ValidationError as exc:
         return JSONResponse({"detail": sanitized_errors(exc.errors())}, status_code=422)
+    nul_field = nul_path(body.model_dump())
+    if nul_field is not None:  # PostgreSQL text cannot hold NUL: reject before any query
+        detail = f"{nul_field} must not contain NUL (0x00) characters"
+        return JSONResponse({"detail": detail}, status_code=422)
     try:
         outcome = await run_in_threadpool(
             ingest_run,

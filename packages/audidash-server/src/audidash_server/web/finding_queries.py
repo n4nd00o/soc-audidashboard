@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from audidash_server import clock
 from audidash_server.models import Asset, FindingEvent, FindingRecord, User
+from audidash_server.textguard import filter_text
 from audidash_server.web.queries import COUNTED, SEVERITY_LABELS, SEVERITY_ORDER, STALE_AFTER
 
 PAGE_SIZE = 50
@@ -90,7 +91,7 @@ def parse_filters(params: Mapping[str, str]) -> Filters:
         severity=_enum(Severity, params.get("severity")),
         category=_enum(Category, params.get("category")),
         status=status,
-        plugin=params.get("plugin", "")[:128],
+        plugin=filter_text(params.get("plugin")),
         stale=params.get("stale", "").lower() in _TRUE,
         page=min(page, 100_000),
     )

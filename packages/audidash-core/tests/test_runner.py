@@ -661,3 +661,17 @@ def test_redacted_fields_respect_limits() -> None:
     assert len(out.title) <= 200
     assert all(len(r) <= 200 for r in out.references)
     Finding.model_validate(out.model_dump())
+
+
+def test_nul_is_stripped_from_findings_warnings_and_stderr(tmp_path: Path) -> None:
+    body = """\
+    sys.stderr.write("err\\x00or\\n")
+    sys.stderr.flush()
+    emit([finding(title="t\\x00", evidence="e\\x00", item_key="k\\x00")], ["w\\x00"])
+    """
+    plugin = make_plugin(tmp_path, body)
+    result = run_local(plugin, _input())
+    assert result.status is RunStatus.ok, result
+    assert "\\u0000" not in result.model_dump_json()
+    assert result.findings[0].title == "t" and result.warnings[0] == "w"
+    assert "error" in result.stderr_tail

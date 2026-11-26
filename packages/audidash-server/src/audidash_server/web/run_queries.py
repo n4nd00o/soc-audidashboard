@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
 from audidash_server.models import Asset, Device, Run, User, VerifiedPlugin
+from audidash_server.textguard import filter_text
 from audidash_server.web.paging import PAGE_SIZE, page_count, parse_page
 
 STATUS_LABELS: dict[RunStatus, str] = {
@@ -61,7 +62,7 @@ def parse_run_filters(params: Mapping[str, str]) -> RunFilters:
         status = None  # invalid filter values are ignored, never an error page
     return RunFilters(
         asset=asset,
-        plugin=params.get("plugin", "")[:128],
+        plugin=filter_text(params.get("plugin")),
         status=status,
         page=parse_page(params.get("page")),
     )

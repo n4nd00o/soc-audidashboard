@@ -28,6 +28,7 @@ from audidash_server.auth.lockout import (
 )
 from audidash_server.auth.totp import decrypt_totp_secret, totp_match_step
 from audidash_server.models import User
+from audidash_server.textguard import NUL
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,8 @@ def authenticate(
 
     now = clock.now()
     user = None
-    if len(username) <= MAX_USERNAME_CHARS:
+    # A NUL-bearing name cannot exist (PostgreSQL would reject the query): plain failure.
+    if len(username) <= MAX_USERNAME_CHARS and NUL not in username:
         user = db.scalars(select(User).where(User.username == username)).first()
     if user is None or user.disabled:
         passwords.verify_password(passwords.dummy_hash(), password)  # equalize timing

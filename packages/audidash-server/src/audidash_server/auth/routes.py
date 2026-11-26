@@ -45,6 +45,7 @@ from audidash_server.db import get_session
 from audidash_server.models import Session, User
 from audidash_server.proxy import client_ip
 from audidash_server.settings import Settings
+from audidash_server.textguard import without_nul
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -123,7 +124,7 @@ def login_submit(  # nosec B107
     )
     if result.outcome is not service.LoginOutcome.ok or result.user is None:
         return _login_page(
-            request, error=GENERIC_LOGIN_ERROR, username=username[:64], status_code=401
+            request, error=GENERIC_LOGIN_ERROR, username=without_nul(username)[:64], status_code=401
         )
     enrolled = result.totp_enrolled
     delete_session_by_token(db, request.cookies.get(SESSION_COOKIE))  # rotate
