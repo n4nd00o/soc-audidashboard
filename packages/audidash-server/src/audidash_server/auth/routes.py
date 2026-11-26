@@ -1,4 +1,4 @@
-"""Login (password + TOTP), first-login TOTP enrolment, logout and the post-login landing page."""
+"""Login (password + TOTP), first-login TOTP enrolment and logout."""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ from audidash_server.auth.sessions import (
     clear_cookie,
     create_session,
     current_session,
-    current_user,
     delete_session_by_token,
     pending_session,
     set_cookie,
@@ -236,7 +235,7 @@ def totp_setup_submit(
     return response
 
 
-# --- logout & landing ----------------------------------------------------------------
+# --- logout --------------------------------------------------------------------------
 
 
 @router.post("/logout", dependencies=[Depends(csrf_protect)])
@@ -254,13 +253,3 @@ def logout(
         response = _see_other("/login")
     clear_cookie(response, SESSION_COOKIE)
     return response
-
-
-@router.get("/")
-def home(
-    request: Request,
-    user: Annotated[User, Depends(current_user)],
-    sess: Annotated[Session, Depends(current_session)],
-) -> Response:
-    """Placeholder landing page; the dashboard (Task 8) replaces it."""
-    return render(request, "home.html", {"user": user, "csrf_token": sess.csrf_token})

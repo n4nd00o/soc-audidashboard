@@ -1,0 +1,17 @@
+{% if ov.top_assets %}
+<table class="data">
+  <thead><tr><th scope="col">Ativo</th><th scope="col">Pontuação</th><th scope="col">Nível</th><th scope="col">Achados</th></tr></thead>
+  <tbody>
+    {% for a in ov.top_assets %}
+    <tr>
+      <td>{{ a.name }}</td>
+      <td>{{ "%.2f"|format(a.score) }}</td>
+      <td><span class="band-badge band-{{ a.band.value }}">{{ band_labels[a.band] }}</span></td>
+      <td>{{ a.counted }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="hint">Nenhum ativo cadastrado.</p>
+{% endif %}

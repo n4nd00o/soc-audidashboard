@@ -1,0 +1,16 @@
+<svg class="trend" viewBox="0 0 300 90" role="img" aria-labelledby="trend-title trend-desc">
+  <title id="trend-title">Pontuação global nos últimos 30 dias</title>
+  <desc id="trend-desc">De {{ "%.2f"|format(ov.trend[0].score) }} em {{ ov.trend[0].day.strftime("%d/%m") }} a {{ "%.2f"|format(ov.trend[-1].score) }} em {{ ov.trend[-1].day.strftime("%d/%m") }}. Escala de 0 a 100.</desc>
+  <line class="trend-grid" x1="8" y1="8" x2="292" y2="8" stroke-width="1"/>
+  <line class="trend-grid" x1="8" y1="82" x2="292" y2="82" stroke-width="1"/>
+  <polyline class="trend-line" points="{{ ov.trend_polyline }}" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>
+<table class="visually-hidden">
+  <caption>Pontuação global por dia (UTC)</caption>
+  <thead><tr><th scope="col">Dia</th><th scope="col">Pontuação</th></tr></thead>
+  <tbody>
+    {% for p in ov.trend %}
+    <tr><td>{{ p.day.isoformat() }}</td><td>{{ "%.2f"|format(p.score) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

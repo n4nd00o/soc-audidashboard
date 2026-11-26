@@ -1,25 +1,43 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true}'>
   <title>{% block title %}SOC AudiDashboard{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/htmx.min.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
 </head>
 <body{% if csrf_token %} hx-headers='{{ {"HX-CSRF-Token": csrf_token} | tojson }}'{% endif %}>
+  <a class="skip-link" href="#main">Ir para o conteúdo</a>
   <header class="topbar">
     <span class="brand">SOC AudiDashboard</span>
-    {% if user %}
-    <form class="logout" method="post" action="/logout">
-      <span class="who">{{ user.username }} ({{ user.role.value }})</span>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit">Sair</button>
-    </form>
-    {% endif %}
+    <div class="topbar-actions">
+      <button type="button" id="theme-toggle" class="ghost" aria-pressed="false">Tema claro</button>
+      {% if user %}
+      <form class="logout" method="post" action="/logout">
+        <span class="who">{{ user.username }} ({{ user.role.value }})</span>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">Sair</button>
+      </form>
+      {% endif %}
+    </div>
   </header>
-  <main class="content">
-    {% block content %}{% endblock %}
-  </main>
+  <div class="shell{% if nav_items %} with-nav{% endif %}">
+    {% if nav_items %}
+    <nav class="sidenav" aria-label="Navegação principal">
+      <ul>
+        {% for item in nav_items %}
+        <li><a href="{{ item.href }}"{% if item.key == current_nav %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+    {% endif %}
+    <main class="content" id="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
 </body>
 </html>
