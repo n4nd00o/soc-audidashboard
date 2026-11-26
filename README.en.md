@@ -113,7 +113,9 @@ uv run audidash run http-security-headers --target example.com --target-type web
 
 Credentials are **not** accepted on the command line (they would leak into shell history and
 argv). The server test suite uses SQLite by default; CI also runs it against PostgreSQL
-(`AUDIDASH_TEST_DATABASE_URL`).
+(`AUDIDASH_TEST_DATABASE_URL`). Beware: the fixtures **drop that database's `public` schema**, so
+they only accept a disposable database whose name ends with `_test` (or contains `test` on
+`localhost`); any other name aborts the run.
 
 ## How to write a plugin
 
