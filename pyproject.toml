@@ -36,6 +36,7 @@ filterwarnings = [
     "ignore:Using .httpx. with .starlette.testclient. is deprecated",
 ]
 markers = [
+    "e2e: drives the real docker compose stack (needs AUDIDASH_E2E=1; run by the CI compose-smoke job)",
     "network_blackhole: needs 10.255.255.1 to silently drop packets (skip with AUDIDASH_SKIP_BLACKHOLE=1)",
 ]
 
@@ -57,6 +58,8 @@ select = ["E", "F", "I", "B", "UP", "S", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101"]
+# test_demo reuses the in-process server fixtures of test_client (imported, then used by name)
+"packages/audidash-core/tests/test_demo.py" = ["S101", "F811"]
 
 [tool.mypy]
 strict = true

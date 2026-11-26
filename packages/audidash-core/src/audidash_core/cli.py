@@ -9,7 +9,7 @@ from typing import TextIO
 import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from audidash_core import cli_server
+from audidash_core import cli_server, demo
 from audidash_core.catalog import CatalogEntry, Trust, load_catalog, load_public_key
 from audidash_core.cli_format import (
     TROJAN_SOURCE_WARNING,
@@ -361,6 +361,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_demo(args: argparse.Namespace) -> int:
+    """Run the three lab audits against the compose demo stack and upload them."""
+    entries = {e.manifest.id: e for e in _catalog(args, cli_server.cached_verified())}
+    missing = [r.plugin_id for r in demo.LAB_RUNS if r.plugin_id not in entries]
+    if missing:
+        raise UsageError(f"demo plugins not found in {_plugins_dir(args)}: {', '.join(missing)}")
+    plugins_args = ["--plugins-dir", str(_plugins_dir(args))]
+    if args.public_key:
+        plugins_args += ["--public-key", args.public_key]
+    community = frozenset(i for i, e in entries.items() if e.trust is Trust.community)
+    wanted = frozenset(r.plugin_id for r in demo.LAB_RUNS)
+    return demo.run_demo(plugins_args=plugins_args, community=community & wanted, run_cli=main)
+
+
 # ---------------------------------------------------------------- parser
 
 
@@ -417,6 +431,15 @@ def _build_parser() -> argparse.ArgumentParser:
     cli_server.add_upload_args(run)
     run.set_defaults(func=_cmd_run)
     cli_server.register(sub)
+    demo_cmd = sub.add_parser(
+        "demo",
+        parents=[common],
+        help="audit the bundled lab targets (docker compose demo) and upload the results",
+        description="Needs a prior `audidash enroll` + `audidash login`. Creates the assets "
+        "lab-web, lab-tls and lab-redis if missing, runs three bundled plugins against the lab "
+        "targets published on 127.0.0.1 by deploy/docker-compose.yml, and uploads each run.",
+    )
+    demo_cmd.set_defaults(func=_cmd_demo)
     return parser
 
 

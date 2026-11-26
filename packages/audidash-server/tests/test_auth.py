@@ -1,6 +1,8 @@
 import getpass
 import hashlib
+import io
 import re
+import sys
 from datetime import timedelta
 from typing import Any
 
@@ -627,3 +629,78 @@ def test_concurrent_enrolment_completion_is_not_a_500(
     assert r.status_code == 303 and r.headers["location"] == "/"
     assert SESSION_COOKIE not in r.headers.get("set-cookie", "")
     assert _sessions(app_client) == []
+
+
+# --- create-admin automation flags and interrupted prompts ----------------------------
+
+PASSWORD_OK = "vivid-Orbit-73-lantern"  # noqa: S105 - test fixture value
+
+
+def test_create_admin_password_stdin_and_secret_file(
+    cli_env: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Any,
+) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO(PASSWORD_OK + "\n"))
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": pytest.fail("must not prompt"))
+    out_file = tmp_path / "totp.secret"
+    argv = ["create-admin", "--username", "ciadmin", "--password-stdin", "--totp-secret-out"]
+    assert cli.main([*argv, str(out_file)]) == 0
+    shown = capsys.readouterr()
+    secret = out_file.read_text().strip()
+    assert secret and secret not in shown.out + shown.err
+    assert "otpauth://" not in shown.out
+    users = _users(cli_env)
+    assert [u.username for u in users] == ["ciadmin"]
+    assert users[0].totp_secret_enc is not None
+    assert decrypt_totp_secret(users[0].totp_secret_enc, KEY) == secret
+    if sys.platform != "win32":
+        assert out_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_create_admin_secret_file_never_overwritten(
+    cli_env: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    out_file = tmp_path / "totp.secret"
+    out_file.write_text("precious")
+    _prompts(monkeypatch, PASSWORD_OK, PASSWORD_OK)
+    argv = ["create-admin", "--username", "ciadmin", "--totp-secret-out", str(out_file)]
+    assert cli.main(argv) == 1
+    assert out_file.read_text() == "precious"
+    assert _users(cli_env) == []
+
+
+def test_create_admin_failure_leaves_no_secret_file(
+    cli_env: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    out_file = tmp_path / "totp.secret"
+    monkeypatch.setattr("sys.stdin", io.StringIO("short1!\n"))
+    argv = ["create-admin", "--username", "ciadmin", "--password-stdin", "--totp-secret-out"]
+    assert cli.main([*argv, str(out_file)]) == 1
+    assert not out_file.exists()
+
+
+@pytest.mark.parametrize("exc", [EOFError, KeyboardInterrupt])
+def test_create_admin_interrupted_prompt_is_clean(
+    cli_env: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    exc: type[BaseException],
+) -> None:
+    def _boom(prompt: str = "") -> str:
+        raise exc
+
+    monkeypatch.setattr(getpass, "getpass", _boom)
+    assert cli.main(["create-admin", "--username", "root"]) == 2
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "Traceback" not in err
+    assert _users(cli_env) == []
+
+
+def test_create_admin_empty_stdin_is_clean(
+    cli_env: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert cli.main(["create-admin", "--username", "root", "--password-stdin"]) == 2
+    assert capsys.readouterr().err.count("\n") == 1

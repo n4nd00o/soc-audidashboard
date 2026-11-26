@@ -197,6 +197,29 @@ class ApiClient:
         except (ValidationError, TypeError):
             raise ApiError("malformed server response") from None
 
+    def create_asset(
+        self,
+        *,
+        name: str,
+        address: str | None,
+        asset_type: TargetType,
+        criticality: Criticality,
+        tags: list[str],
+    ) -> AssetInfo:
+        """POST /api/v1/assets; an existing name raises ApiError with status 409."""
+        body = {
+            "name": name,
+            "address": address,
+            "asset_type": asset_type.value,
+            "criticality": criticality.value,
+            "tags": tags,
+        }
+        data = self._request("POST", "/api/v1/assets", json=body)
+        try:
+            return AssetInfo.model_validate(data)
+        except ValidationError:
+            raise ApiError("malformed server response") from None
+
     def upload_run(self, run_id: str, asset: str, result: dict[str, Any]) -> UploadSummary:
         body = {"run_id": run_id, "asset": asset, "result": result}
         data = self._request("POST", "/api/v1/runs", json=body)
