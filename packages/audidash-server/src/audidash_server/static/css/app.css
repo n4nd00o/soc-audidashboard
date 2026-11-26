@@ -1,0 +1,58 @@
+/* SOC AudiDashboard: minimal base styles (no inline styles anywhere; CSP style-src 'self'). */
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #f4f6f8;
+  color: #1d2329;
+  line-height: 1.5;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.5rem;
+  background: #1d2329;
+  color: #fff;
+}
+.brand { font-weight: 700; }
+.logout { display: flex; align-items: center; gap: 0.75rem; margin: 0; }
+.who { font-size: 0.9rem; opacity: 0.85; }
+.content { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; }
+.card {
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 1.5rem;
+}
+.auth { max-width: 26rem; margin: 0 auto; }
+.auth form { display: flex; flex-direction: column; gap: 0.5rem; }
+label { font-weight: 600; font-size: 0.9rem; }
+input[type="text"], input[type="password"] {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #b8c1ca;
+  border-radius: 4px;
+  font-size: 1rem;
+}
+button {
+  padding: 0.55rem 1rem;
+  border: 0;
+  border-radius: 4px;
+  background: #0b5cad;
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+button:hover, button:focus-visible { background: #084a8c; }
+.error {
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid #b42318;
+  background: #fdecea;
+  color: #7a1a12;
+}
+.hint { font-size: 0.85rem; color: #57606a; }
+.qr { display: block; margin: 1rem auto; image-rendering: pixelated; }
+.totp-secret { word-break: break-all; font-size: 0.95rem; }
+/* HTMX request indicator (includeIndicatorStyles is disabled to stay CSP-compliant). */
+.htmx-indicator { opacity: 0; transition: opacity 200ms ease-in; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }

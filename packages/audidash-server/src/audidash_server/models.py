@@ -91,6 +91,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     totp_secret_enc: Mapped[str | None] = mapped_column(Text, default=None)
+    # Last accepted TOTP time step: a code is single-use within its validity window.
+    totp_last_step: Mapped[int | None] = mapped_column(Integer, default=None)
     role: Mapped[Role] = mapped_column(StrEnumType(Role))
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(default=None)
@@ -104,6 +106,10 @@ class Session(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # Only sha256(cookie token) is stored; the cookie value itself never touches the DB.
+    token_sha256: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # True while a first-login user must still enrol TOTP (not a full session).
+    mfa_pending: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime]
     last_seen_at: Mapped[datetime]
     csrf_token: Mapped[str] = mapped_column(String(128))

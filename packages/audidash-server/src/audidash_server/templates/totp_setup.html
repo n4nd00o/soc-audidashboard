@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Configurar autenticador · SOC AudiDashboard{% endblock %}
+{% block content %}
+<section class="card auth">
+  <h1>Configurar autenticação em dois fatores</h1>
+  <p>O segundo fator é obrigatório. Escaneie o QR code com um aplicativo autenticador
+     (TOTP, 6 dígitos, 30 segundos) e digite o código gerado para concluir o acesso.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <img class="qr" src="{{ qr_data_uri }}" alt="QR code para o aplicativo autenticador" width="240" height="240">
+  <p>Ou digite a chave manualmente: <code class="totp-secret">{{ secret }}</code></p>
+  <form method="post" action="/totp/setup">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="setup_token" value="{{ setup_token }}">
+    <label for="code">Código do autenticador</label>
+    <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+           autocomplete="one-time-code" required autofocus>
+    <button type="submit">Confirmar</button>
+  </form>
+</section>
+{% endblock %}

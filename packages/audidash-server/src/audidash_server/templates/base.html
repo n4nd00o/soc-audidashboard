@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>{% block title %}SOC AudiDashboard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body{% if csrf_token %} hx-headers='{{ {"HX-CSRF-Token": csrf_token} | tojson }}'{% endif %}>
+  <header class="topbar">
+    <span class="brand">SOC AudiDashboard</span>
+    {% if user %}
+    <form class="logout" method="post" action="/logout">
+      <span class="who">{{ user.username }} ({{ user.role.value }})</span>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit">Sair</button>
+    </form>
+    {% endif %}
+  </header>
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

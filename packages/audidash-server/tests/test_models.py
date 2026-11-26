@@ -122,6 +122,7 @@ def test_user_delete_cascades_sessions(db_session: DbSession) -> None:
     sess = Session(
         id=sid_id,
         user_id=user.id,
+        token_sha256="0" * 64,
         created_at=_now(),
         last_seen_at=_now(),
         csrf_token="c",  # noqa: S106
