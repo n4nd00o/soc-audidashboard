@@ -10,14 +10,14 @@ import sys
 import uuid
 
 import segno
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
-from audidash_server import clock
+from audidash_server import audit, clock
 from audidash_server.auth.passwords import WeakPasswordError, hash_password, validate_password
 from audidash_server.auth.totp import encrypt_totp_secret, provisioning_uri, totp_secret_new
 from audidash_server.db import init_db, make_engine
-from audidash_server.models import Role, User
+from audidash_server.models import AuditEntry, Role, User
 from audidash_server.settings import Settings
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,64}$")
@@ -65,18 +65,23 @@ def create_admin(username: str) -> int:
             if db.scalars(select(User).where(User.username == username)).first() is not None:
                 return _err(f"o usuário '{username}' já existe; nada foi alterado.")
             secret = totp_secret_new()
-            db.add(
-                User(
-                    id=uuid.uuid4(),
-                    username=username,
-                    password_hash=hash_password(password),
-                    totp_secret_enc=encrypt_totp_secret(
-                        secret, settings.secret_key.get_secret_value()
-                    ),
-                    role=Role.admin,
-                    failed_logins=0,
-                    created_at=clock.now(),
-                )
+            user = User(
+                id=uuid.uuid4(),
+                username=username,
+                password_hash=hash_password(password),
+                totp_secret_enc=encrypt_totp_secret(secret, settings.secret_key.get_secret_value()),
+                role=Role.admin,
+                failed_logins=0,
+                created_at=clock.now(),
+            )
+            db.add(user)
+            audit.record(
+                db,
+                action="user.create",
+                actor_user_id=None,
+                actor_device_id=None,
+                target=username,
+                details={"role": Role.admin.value, "via": "cli"},
             )
             db.commit()
     finally:
@@ -94,11 +99,32 @@ def create_admin(username: str) -> int:
     return 0
 
 
+def audit_verify() -> int:
+    database_url = Settings().database_url
+    if not database_url:
+        return _err("AUDIDASH_DATABASE_URL is missing")
+    engine = make_engine(database_url)
+    try:
+        with DbSession(engine) as db:
+            bad = audit.verify_chain(db)
+            total = db.scalar(select(func.count()).select_from(AuditEntry)) or 0
+    finally:
+        engine.dispose()
+    if bad is not None:
+        print(f"audit chain BROKEN at seq {bad}")
+        return 1
+    print(f"audit chain OK ({total} entries)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="audidash-server", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     admin = sub.add_parser("create-admin", help="create an admin account (interactive)")
     admin.add_argument("--username", required=True)
+    audit_cmd = sub.add_parser("audit", help="audit log tools")
+    audit_sub = audit_cmd.add_subparsers(dest="audit_command", required=True)
+    audit_sub.add_parser("verify", help="verify the audit hash chain")
     return parser
 
 
@@ -106,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "create-admin":
         return create_admin(args.username)
+    if args.command == "audit" and args.audit_command == "verify":
+        return audit_verify()
     return 2  # pragma: no cover - argparse enforces the choices
 
 

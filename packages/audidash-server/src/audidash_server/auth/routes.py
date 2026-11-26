@@ -14,7 +14,7 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session as DbSession
 from starlette.responses import Response
 
-from audidash_server import clock
+from audidash_server import audit, clock
 from audidash_server.auth import passwords
 from audidash_server.auth.csrf import (
     check_login_csrf,
@@ -160,6 +160,15 @@ def login_submit(
         """Every failure path does the same DB work: one counted UPDATE and a commit."""
         if record_failure(db, user_id, now):
             logger.warning("account %s locked after %d failures", user_id, MAX_FAILED_LOGINS)
+        # Same transaction as the counter UPDATE; never says which factor failed.
+        audit.record(
+            db,
+            action="login.failure",
+            actor_user_id=None,
+            actor_device_id=None,
+            target="login",
+            details={"username": username[:64], "reason": "invalid"},
+        )
         db.commit()
         return fail()
 
@@ -189,6 +198,14 @@ def login_submit(
         return fail()
     delete_session_by_token(db, request.cookies.get(SESSION_COOKIE))  # rotate
     token, _ = create_session(db, user, ip, pending=not enrolled)
+    audit.record(
+        db,
+        action="login.success",
+        actor_user_id=user.id,
+        actor_device_id=None,
+        target=user.username,
+        details={"second_factor_enrolled": enrolled},
+    )
     db.commit()
     response = _see_other("/" if enrolled else "/totp/setup")
     set_cookie(response, SESSION_COOKIE, token)
