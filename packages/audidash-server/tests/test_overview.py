@@ -16,6 +16,7 @@ from audidash_core.scoring import (
 from audidash_server.models import Asset, FindingEvent, FindingRecord, Role
 from audidash_server.web import queries
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy.orm import Session as DbSession
 
 HTML = {"Accept": "text/html"}
@@ -275,3 +276,23 @@ def test_static_app_js_served(app_client: TestClient) -> None:
     r = app_client.get("/static/js/app.js")
     assert r.status_code == 200
     assert "localStorage" in r.text and "try" in r.text
+
+
+def test_trend_reads_events_in_a_deterministic_order(
+    app_client: TestClient, seeded: Seeded, frozen_clock: Any
+) -> None:
+    statements: list[str] = []
+
+    def capture(conn: Any, cursor: Any, statement: str, *_: Any) -> None:
+        statements.append(" ".join(statement.split()))
+
+    engine = app_client.app.state.engine  # type: ignore[attr-defined]
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        with app_client.app.state.sessionmaker() as s:  # type: ignore[attr-defined]
+            queries.build_overview(s, NOW)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    prefix = "SELECT finding_events.finding_id, finding_events.to_status, finding_events.at "
+    (events_sql,) = [q for q in statements if q.startswith(prefix)]
+    assert events_sql.endswith("ORDER BY finding_events.at, finding_events.id")

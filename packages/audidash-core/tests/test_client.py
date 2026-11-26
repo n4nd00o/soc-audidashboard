@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 import pyotp
 import pytest
-from audidash_core import cli_server
+from audidash_core import cli_server, runner
 from audidash_core.cli import main
 from audidash_core.client import api, identity
 from audidash_core.client import config as client_config
@@ -190,6 +190,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     transport = ProxyTransport(app_client, settings.proxy_secret.get_secret_value(), config_dir)
     monkeypatch.setattr(clock, "now", lambda: NOW)
     monkeypatch.setattr(client_config, "utcnow", lambda: NOW)
+    # Run times come from the same frozen clock (the server rejects times > 24 h ahead).
+    monkeypatch.setattr(runner, "_now", lambda: NOW)
     monkeypatch.setattr(client_config, "default_config_dir", lambda: config_dir)
     monkeypatch.setattr(cli_server, "make_transport", lambda _directory: transport)
     return Env(app_client, settings, config_dir, transport, "alice", secret)

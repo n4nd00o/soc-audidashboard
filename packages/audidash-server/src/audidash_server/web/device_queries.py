@@ -111,7 +111,7 @@ _HOST_RE = re.compile(
 
 
 def default_urls(base_url: str) -> tuple[str, str, bool]:
-    """(dashboard URL, API URL, derived_ok) from the request: same origin, API on port 9443.
+    """(dashboard URL, API URL, derived_ok) from the request: same host, https, API on 9443.
 
     The Host header is attacker-controlled and ends up in a command the admin pastes into a
     shell, so only a plain hostname / IPv4 / [IPv6] with an optional port is accepted;
@@ -130,8 +130,10 @@ def default_urls(base_url: str) -> tuple[str, str, bool]:
         port = 0
     if port is not None and not 1 <= port <= 65535:
         return PLACEHOLDER_DASHBOARD, PLACEHOLDER_API, False
-    api = f"{parts.scheme}://{match['host']}:{API_PORT}"
-    return f"{parts.scheme}://{parts.netloc}", api, True
+    # Always https: behind Caddy the app sees plain http, but both listeners are TLS-only and
+    # the CLI refuses non-https URLs.
+    api = f"https://{match['host']}:{API_PORT}"
+    return f"https://{parts.netloc}", api, True
 
 
 def enroll_command(

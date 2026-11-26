@@ -162,7 +162,10 @@ def daily_trend(
     timeline: list[tuple[datetime, uuid.UUID, FindingStatus]] = [
         (e.at, e.finding_id, e.to_status)
         for e in db.execute(
-            select(FindingEvent.finding_id, FindingEvent.to_status, FindingEvent.at)
+            # (at, id): events sharing a timestamp replay in the same order on every backend.
+            select(FindingEvent.finding_id, FindingEvent.to_status, FindingEvent.at).order_by(
+                FindingEvent.at, FindingEvent.id
+            )
         ).all()
         if e.finding_id in findings
     ]

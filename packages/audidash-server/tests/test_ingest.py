@@ -263,3 +263,29 @@ def test_run_metadata_accepts_semverish_and_null_hash(api: Any) -> None:
     result["manifest_sha256"] = None
     result["trust"] = None
     assert _upload(api, result).status_code in (200, 201)
+
+
+@pytest.mark.parametrize(
+    ("started", "finished"),
+    [
+        ("2026-11-26T12:01:00Z", "2026-11-26T12:02:00Z"),  # > 24 h ahead of the server
+        ("2026-11-25T11:59:00Z", "2026-11-26T12:00:11Z"),  # finished_at alone too far ahead
+        ("1999-12-31T23:59:59Z", "2026-11-25T12:00:00Z"),  # before 2000-01-01
+        ("1970-01-01T00:00:00Z", "1970-01-01T00:00:01Z"),
+    ],
+)
+def test_implausible_run_times_rejected(
+    api: Any, frozen_clock: Any, started: str, finished: str
+) -> None:
+    result = _result([_finding("A-1")])
+    result |= {"started_at": started, "finished_at": finished}
+    r = _upload(api, result)
+    assert r.status_code == 422
+    assert "started_at/finished_at" in r.json()["detail"]
+    assert _rows(api.client, Run) == []
+
+
+def test_run_times_within_bounds_accepted(api: Any, frozen_clock: Any) -> None:
+    result = _result([_finding("A-1")])
+    result |= {"started_at": "2000-01-01T00:00:00Z", "finished_at": "2026-11-26T12:00:00Z"}
+    assert _upload(api, result).status_code == 201
