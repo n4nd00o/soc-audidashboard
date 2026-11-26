@@ -215,9 +215,16 @@ class AssetSpec:
     tags: tuple[str, ...] = ()
 
 
-def ensure_assets(specs: list[AssetSpec]) -> dict[str, bool]:
-    """Create each missing asset (409 = it already exists); name -> True when created."""
-    created: dict[str, bool] = {}
+@dataclass(frozen=True)
+class AssetOutcome:
+    state: str  # "created" | "present" | "conflict"
+    existing_address: str | None = None
+
+
+def ensure_assets(specs: list[AssetSpec]) -> dict[str, AssetOutcome]:
+    """Create each missing asset. An existing one (409) is "present" when its address matches
+    the spec and "conflict" otherwise (a different asset already owns the name)."""
+    outcomes: dict[str, AssetOutcome] = {}
     try:
         with _authed_client(_directory()) as client:
             for spec in specs:
@@ -229,14 +236,18 @@ def ensure_assets(specs: list[AssetSpec]) -> dict[str, bool]:
                         criticality=spec.criticality,
                         tags=list(spec.tags),
                     )
-                    created[spec.name] = True
+                    outcomes[spec.name] = AssetOutcome("created")
                 except ApiError as exc:
                     if exc.status != 409:
                         raise
-                    created[spec.name] = False
+                    existing = next((a for a in client.assets() if a.name == spec.name), None)
+                    if existing is not None and existing.address != spec.address:
+                        outcomes[spec.name] = AssetOutcome("conflict", existing.address)
+                    else:
+                        outcomes[spec.name] = AssetOutcome("present")
     except ClientError as exc:
         raise ServerCliError(str(exc)) from None
-    return created
+    return outcomes
 
 
 def dashboard_url() -> str:

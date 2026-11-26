@@ -63,10 +63,11 @@ def _invoke(run_cli: RunCli, argv: list[str]) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
-def _finding_count(stdout: str) -> int | None:
+def _parse_result(stdout: str) -> tuple[int, list[str]] | None:
+    """(finding count, plugin warnings) from the run's --json output, if it parses."""
     try:
         result = json.loads(stdout.strip().splitlines()[-1])
-        return len(result["findings"])
+        return len(result["findings"]), [str(w) for w in result["warnings"]]
     except (IndexError, ValueError, KeyError, TypeError):
         return None
 
@@ -98,9 +99,20 @@ def run_demo(*, plugins_args: list[str], community: frozenset[str], run_cli: Run
     `community` lists the demo plugin ids that have no catalog signature: they get an explicit
     `--yes`, which is justified only because they come from the project's own bundled directory.
     """
-    created = cli_server.ensure_assets([item.asset for item in LAB_RUNS])
-    for name, is_new in created.items():
-        _say(f"asset {name}: {'created' if is_new else 'already present'}")
+    outcomes = cli_server.ensure_assets([item.asset for item in LAB_RUNS])
+    skipped: set[str] = set()
+    for item in LAB_RUNS:
+        outcome = outcomes[item.asset.name]
+        if outcome.state == "conflict":
+            skipped.add(item.asset.name)
+            _say(
+                f"error: asset {item.asset.name!r} already exists with address "
+                f"{outcome.existing_address!r}, not {item.asset.address!r}; rename or delete "
+                "it on the server, its run is skipped",
+                stderr=True,
+            )
+        else:
+            _say(f"asset {item.asset.name}: {outcome.state}")
     if community:
         _say(
             "NOTICE: "
@@ -110,17 +122,30 @@ def run_demo(*, plugins_args: list[str], community: frozenset[str], run_cli: Run
             "you have not read.",
             stderr=True,
         )
-    failures = 0
+    failures = len(skipped)
+    unhealthy = 0
     for item in LAB_RUNS:
+        if item.asset.name in skipped:
+            continue
         argv = _argv(item, plugins_args, assume_yes=item.plugin_id in community)
         code, stdout, stderr = _invoke(run_cli, argv)
         lines = stderr.splitlines()
         uploaded = next((ln for ln in lines if ln.startswith("Uploaded:")), None)
         label = f"{item.plugin_id} on {item.asset.name}"
         if code == 0 and uploaded:
-            count = _finding_count(stdout)
+            parsed = _parse_result(stdout)
+            count, warnings = parsed if parsed else (None, [])
             found = f"{count} finding(s)" if count is not None else "done"
             _say(f"{label}: {found}. {uploaded}")
+            for warning in warnings:
+                _say(f"warning: {label}: {warning}", stderr=True)
+            if warnings or count == 0:
+                unhealthy += 1
+                if count == 0:
+                    _say(
+                        f"note: {label} produced no findings; the lab target may be down",
+                        stderr=True,
+                    )
             continue
         failures += 1
         _say(f"error: {label} failed (exit {code})", stderr=True)
@@ -128,6 +153,10 @@ def run_demo(*, plugins_args: list[str], community: frozenset[str], run_cli: Run
             if line.startswith(("error:", "not uploaded")):
                 _say(f"  {line}", stderr=True)
     if failures:
-        raise ServerCliError(f"{failures} of {len(LAB_RUNS)} demo runs failed")
+        raise ServerCliError(f"{failures} of {len(LAB_RUNS)} demo runs failed or were skipped")
+    if unhealthy:
+        raise ServerCliError(
+            "demo finished with problems — is the lab running? (docker compose ps)"
+        )
     _say(f"Demo complete. Open the dashboard: {cli_server.dashboard_url()}")
     return 0
