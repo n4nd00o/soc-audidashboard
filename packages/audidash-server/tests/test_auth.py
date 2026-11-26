@@ -7,7 +7,7 @@ from typing import Any
 import pyotp
 import pytest
 from audidash_server import cli
-from audidash_server.auth import passwords, routes
+from audidash_server.auth import passwords, routes, service
 from audidash_server.auth.lockout import clear_failures_if_unlocked, record_failure
 from audidash_server.auth.passwords import (
     WeakPasswordError,
@@ -492,7 +492,7 @@ def test_every_failure_path_does_the_same_db_write(
         calls.append(user_id)
         return real(db, user_id, now)
 
-    monkeypatch.setattr(routes, "record_failure", spy)
+    monkeypatch.setattr(service, "record_failure", spy)
     u = make_user()
     make_user("off", Role.viewer)
     with app_client.app.state.sessionmaker() as s:  # type: ignore[attr-defined]

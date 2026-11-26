@@ -6,11 +6,17 @@ from pathlib import Path
 
 import jinja2
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.types import ASGIApp
 
 from audidash_server import __version__
+from audidash_server.api.assets import router as assets_router
+from audidash_server.api.auth_token import router as auth_token_router
+from audidash_server.api.enroll import router as enroll_router
+from audidash_server.api.errors import validation_error_handler
+from audidash_server.api.ingest import router as ingest_router
 from audidash_server.auth.passwords import dummy_hash
 from audidash_server.auth.ratelimit import LoginRateLimiter
 from audidash_server.auth.routes import router as auth_router
@@ -56,7 +62,12 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.login_limiter = LoginRateLimiter()
     dummy_hash()  # precompute so the first unknown-user login is not measurably slower
     app.add_exception_handler(NotAuthenticated, not_authenticated_handler)
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.include_router(auth_router)
+    app.include_router(enroll_router)
+    app.include_router(auth_token_router)
+    app.include_router(assets_router)
+    app.include_router(ingest_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

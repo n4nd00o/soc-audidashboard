@@ -171,9 +171,9 @@ def test_totp_claim_race_is_audited(
     frozen_clock: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from audidash_server.auth import routes
+    from audidash_server.auth import service
 
-    monkeypatch.setattr(routes, "_claim_totp_step", lambda db, user, step: False)
+    monkeypatch.setattr(service, "_claim_totp_step", lambda db, user, step: False)
     u = make_user()
     assert login(u.username, u.password, u.code(frozen_clock.current)).status_code == 401
     assert [r.details for r in _failures(app_client)] == [
@@ -188,9 +188,9 @@ def test_concurrent_lock_path_is_audited(
     frozen_clock: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from audidash_server.auth import routes
+    from audidash_server.auth import service
 
-    monkeypatch.setattr(routes, "clear_failures_if_unlocked", lambda db, uid, now: False)
+    monkeypatch.setattr(service, "clear_failures_if_unlocked", lambda db, uid, now: False)
     u = make_user()
     assert login(u.username, u.password, u.code(frozen_clock.current)).status_code == 401
     assert len(_failures(app_client)) == 1

@@ -193,6 +193,8 @@ class Run(Base):
     finished_at: Mapped[datetime]
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
     received_at: Mapped[datetime]
+    # Ingestion response, replayed verbatim when the same device re-uploads this run_id.
+    ingest_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
 
 
 class FindingRecord(Base):
