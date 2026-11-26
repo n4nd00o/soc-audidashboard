@@ -60,7 +60,10 @@ def test_role_matrix(
     u = make_user(f"u-{role.value}", role)
     assert login(u.username, u.password, u.code(frozen_clock.current)).status_code == 303
     headers = {"HX-CSRF-Token": _token(rbac_client)}
-    assert rbac_client.post("/_t/admin", headers=headers).status_code == admin_status
+    admin = rbac_client.post("/_t/admin", headers=headers)
+    assert admin.status_code == admin_status
+    if admin_status == 403:
+        assert admin.json() == {"detail": "Forbidden"}
     assert rbac_client.post("/_t/write", headers=headers).status_code == write_status
     assert rbac_client.get("/_t/read").json() == {"role": role.value}
 
@@ -72,6 +75,7 @@ def test_viewer_post_admin_route_forbidden_even_with_csrf(
     login(u.username, u.password, u.code(frozen_clock.current))
     r = rbac_client.post("/_t/admin", data={"csrf_token": _token(rbac_client)})
     assert r.status_code == 403
+    assert r.json() == {"detail": "Forbidden"}  # from RBAC, not from CSRF
 
 
 def test_admin_route_requires_csrf(
