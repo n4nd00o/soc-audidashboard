@@ -124,6 +124,12 @@ def default_urls(base_url: str) -> tuple[str, str, bool]:
     match = _HOST_RE.fullmatch(parts.netloc)
     if parts.scheme not in ("http", "https") or match is None:
         return PLACEHOLDER_DASHBOARD, PLACEHOLDER_API, False
+    try:
+        port = parts.port
+    except ValueError:
+        port = 0
+    if port is not None and not 1 <= port <= 65535:
+        return PLACEHOLDER_DASHBOARD, PLACEHOLDER_API, False
     api = f"{parts.scheme}://{match['host']}:{API_PORT}"
     return f"{parts.scheme}://{parts.netloc}", api, True
 

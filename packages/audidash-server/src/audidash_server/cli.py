@@ -10,6 +10,7 @@ import sys
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 
 import segno
@@ -25,11 +26,12 @@ from audidash_server.ca import (
     SERVER_CERT_DEFAULT_DAYS,
     load_existing_ca,
     load_or_create_ca,
+    replace_ca,
 )
 from audidash_server.db import init_db, make_engine
 from audidash_server.models import AuditEntry, Role, User
 from audidash_server.services import retention
-from audidash_server.services.enrollment import ENROLLMENT_TOKEN_TTL, create_enrollment_token
+from audidash_server.services.enrollment import create_enrollment_token
 from audidash_server.settings import Settings
 from audidash_server.web import device_queries as dq
 
@@ -193,14 +195,25 @@ def purge(*, dry_run: bool) -> int:
     return 0
 
 
-def init_ca() -> int:
+def init_ca(*, force: bool = False) -> int:
     try:
         settings = _ops_settings(need_db=False)
-        existed = load_existing_ca(settings.data_dir, settings.ca_passphrase) is not None
-        ca = load_or_create_ca(settings.data_dir, settings.ca_passphrase)
+        if force:
+            ca, moved = replace_ca(settings.data_dir, settings.ca_passphrase)
+            for path in moved:
+                print(f"AVISO: arquivo anterior preservado em {path}", file=sys.stderr)
+            print(
+                "AVISO: uma NOVA CA foi criada; todos os dispositivos inscritos precisam "
+                "se reinscrever e o certificado TLS do servidor deve ser reemitido.",
+                file=sys.stderr,
+            )
+            print("CA criada.")
+        else:
+            existed = load_existing_ca(settings.data_dir, settings.ca_passphrase) is not None
+            ca = load_or_create_ca(settings.data_dir, settings.ca_passphrase)
+            print("CA já existente." if existed else "CA criada.")
     except (ValueError, OSError) as exc:  # CAError is a ValueError
         return _fail(str(exc))
-    print("CA já existente." if existed else "CA criada.")
     print(f"SHA-256: {ca.fingerprint_sha256()}")
     return 0
 
@@ -226,6 +239,8 @@ def create_token(*, hours: int, created_by: str | None) -> int:
     try:
         settings = _ops_settings()
         ca = _existing_ca(settings)
+        if ca is None:
+            return _fail("CA not initialised — run init-ca", 1)
         with _db(settings) as db:
             if created_by is not None:
                 owner = db.scalars(
@@ -235,10 +250,12 @@ def create_token(*, hours: int, created_by: str | None) -> int:
                 admins = db.scalars(
                     select(User).where(User.role == Role.admin, User.disabled.is_(False))
                 ).all()
-                owner = admins[0] if len(admins) == 1 else None
+                if len(admins) > 1:
+                    return _fail("vários administradores ativos: informe --created-by USUARIO", 1)
+                owner = admins[0] if admins else None
             if owner is None:
                 return _fail("usuário não encontrado (use --created-by USUARIO)", 1)
-            token = create_enrollment_token(db, owner.id, ttl=ENROLLMENT_TOKEN_TTL * hours / 24)
+            token = create_enrollment_token(db, owner.id, ttl=timedelta(hours=hours))
             audit.record(
                 db,
                 action="enrollment_token.create",
@@ -257,7 +274,7 @@ def create_token(*, hours: int, created_by: str | None) -> int:
         api_url=settings.public_api_url or dq.PLACEHOLDER_API,
         token=token,
         name="<NOME>",
-        ca_fingerprint=ca.fingerprint_sha256() if ca else "<SHA256-da-CA>",
+        ca_fingerprint=ca.fingerprint_sha256(),
     )
     print(f"Token (exibido uma única vez, válido por {hours} h, uso único): {token}")
     print(command)
@@ -305,7 +322,10 @@ def build_parser() -> argparse.ArgumentParser:
     audit_sub.add_parser("verify", help="verify the audit hash chain")
     purge_cmd = sub.add_parser("purge", help="delete runs and findings past the retention window")
     purge_cmd.add_argument("--dry-run", action="store_true", help="only report the counts")
-    sub.add_parser("init-ca", help="create the internal CA if it does not exist")
+    init_cmd = sub.add_parser("init-ca", help="create the internal CA if it does not exist")
+    init_cmd.add_argument(
+        "--force", action="store_true", help="start a NEW CA, keeping the old files renamed"
+    )
     sub.add_parser("show-ca-fingerprint", help="print the CA certificate SHA-256")
     token_cmd = sub.add_parser("create-enrollment-token", help="issue a single-use enrolment token")
     token_cmd.add_argument("--hours", type=int, default=24)
@@ -328,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "purge":
         return purge(dry_run=args.dry_run)
     if args.command == "init-ca":
-        return init_ca()
+        return init_ca(force=args.force)
     if args.command == "show-ca-fingerprint":
         return show_ca_fingerprint()
     if args.command == "create-enrollment-token":

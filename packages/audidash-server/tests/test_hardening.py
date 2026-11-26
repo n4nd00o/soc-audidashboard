@@ -102,6 +102,8 @@ def test_default_urls_accepts_plain_hosts(base: str, dashboard: str, api: str) -
         "https://a&b/",
         "https://user@host/",
         "https://host:99999999/",
+        "https://host:0/",
+        "https://host:65536/",
         "https://[::1/",
         "ftp://host/",
         "https:///",
