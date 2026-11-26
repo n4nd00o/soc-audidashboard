@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Annotated
-
 from audidash_core.manifest import TargetType
 from audidash_core.scoring import Criticality
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from audidash_server import audit, clock
 from audidash_server.api.deps import Db, Principal, Writer
 from audidash_server.models import Asset
+from audidash_server.services.assets import AssetCreate
 
 router = APIRouter(prefix="/api/v1/assets")
-
-_NO_CONTROL = r"^[^\x00-\x1f\x7f-\x9f]+$"
 
 
 class AssetOut(BaseModel):
@@ -30,18 +27,6 @@ class AssetOut(BaseModel):
 
 class AssetCreated(AssetOut):
     tags: list[str]
-
-
-class AssetCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=128, pattern=_NO_CONTROL)
-    address: str | None = Field(default=None, min_length=1, max_length=255, pattern=_NO_CONTROL)
-    asset_type: TargetType
-    criticality: Criticality
-    tags: list[Annotated[str, Field(min_length=1, max_length=64, pattern=_NO_CONTROL)]] = Field(
-        default=[], max_length=32
-    )
 
 
 def _out(asset: Asset) -> AssetOut:

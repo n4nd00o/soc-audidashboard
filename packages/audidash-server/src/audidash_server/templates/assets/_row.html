@@ -1,0 +1,20 @@
+<tr id="asset-{{ row.id }}">
+  <td data-label="Nome">{{ row.name }}</td>
+  <td data-label="Endereço">{{ row.address or "—" }}</td>
+  <td data-label="Tipo">{{ row.asset_type.value }}</td>
+  <td data-label="Criticidade">{{ criticality_labels[row.criticality] }}</td>
+  <td data-label="Pontuação">{{ "%.2f"|format(row.score) }}</td>
+  <td data-label="Nível"><span class="band-badge band-{{ row.band.value }}">{{ band_labels[row.band] }}</span></td>
+  <td data-label="Abertos">{{ row.open_count }}</td>
+  <td data-label="Tags">{% for tag in row.tags %}<span class="tag">{{ tag }}</span> {% endfor %}</td>
+  {% if can_write %}
+  <td data-label="Ações" class="row-actions">
+    <a href="/assets/{{ row.id }}/edit" hx-get="/assets/{{ row.id }}/edit" hx-target="#asset-{{ row.id }}" hx-swap="outerHTML">Editar</a>
+    <form method="post" action="/assets/{{ row.id }}/delete" hx-post="/assets/{{ row.id }}/delete" hx-target="#asset-{{ row.id }}" hx-swap="outerHTML" hx-confirm="Excluir este ativo?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="ghost">Excluir</button>
+    </form>
+    {% if row_error %}<p class="error" role="alert">{{ row_error }}</p>{% endif %}
+  </td>
+  {% endif %}
+</tr>
