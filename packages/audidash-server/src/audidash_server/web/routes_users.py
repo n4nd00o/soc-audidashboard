@@ -21,6 +21,7 @@ from audidash_server.auth.sessions import current_session, current_user
 from audidash_server.db import get_session
 from audidash_server.models import Role, Session, User
 from audidash_server.textguard import without_nul
+from audidash_server.web.forms import Form, form_text
 from audidash_server.web.layout import page_context
 
 router = APIRouter(prefix="/users", dependencies=[require_role(Role.admin), Depends(csrf_protect)])
@@ -93,11 +94,12 @@ def list_page(request: Request, db: Db, user: CurrentUser, sess: CurrentSession)
 
 
 @router.post("")
-async def create(request: Request, db: Db, user: CurrentUser, sess: CurrentSession) -> Response:
-    form = await request.form()
-    username = str(form.get("username") or "").strip()
-    role_raw = str(form.get("role") or "")
-    password = str(form.get("password") or "")
+def create(
+    request: Request, db: Db, user: CurrentUser, sess: CurrentSession, form: Form
+) -> Response:
+    username = form_text(form, "username").strip()
+    role_raw = form_text(form, "role")
+    password = form_text(form, "password")
 
     def fail(message: str, code: int = 422) -> Response:
         return _render_page(
@@ -151,12 +153,17 @@ async def create(request: Request, db: Db, user: CurrentUser, sess: CurrentSessi
 
 
 @router.post("/{user_id}/role")
-async def change_role(
-    user_id: uuid.UUID, request: Request, db: Db, user: CurrentUser, sess: CurrentSession
+def change_role(
+    user_id: uuid.UUID,
+    request: Request,
+    db: Db,
+    user: CurrentUser,
+    sess: CurrentSession,
+    form: Form,
 ) -> Response:
     target = _get_user(db, user_id)
     try:
-        role = Role(str((await request.form()).get("role") or ""))
+        role = Role(form_text(form, "role"))
     except ValueError:
         return _render_page(request, db, user, sess, status_code=422, error=ROLE_MESSAGE)
     if target.id == user.id:

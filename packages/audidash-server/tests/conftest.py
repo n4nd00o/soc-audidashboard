@@ -114,6 +114,8 @@ def _truncate_all(url: str) -> None:
             return
         names = ", ".join(f'"{t.name}"' for t in tables)
         with engine.begin() as conn:
+            # A connection leaked by an earlier test must fail this test fast, not hang the job.
+            conn.execute(text("SET LOCAL lock_timeout = '10s'"))
             conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))  # noqa: S608
     finally:
         engine.dispose()
@@ -132,8 +134,11 @@ def settings(tmp_path: Path, _pg_schema: str) -> Settings:
 
 
 @pytest.fixture
-def app_client(settings: Settings) -> TestClient:
-    return TestClient(create_app(settings), base_url="https://testserver")
+def app_client(settings: Settings) -> Iterator[TestClient]:
+    client = TestClient(create_app(settings), base_url="https://testserver")
+    yield client
+    # Close pooled connections so the next test's TRUNCATE never waits on this app's sessions.
+    client.app.state.engine.dispose()  # type: ignore[attr-defined]
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
+from starlette.datastructures import FormData
 from starlette.responses import RedirectResponse, Response
 
 from audidash_server import audit, clock
@@ -19,6 +20,7 @@ from audidash_server.auth.sessions import current_session, current_user
 from audidash_server.db import get_session
 from audidash_server.models import Role, Run, Session, User, VerifiedPlugin
 from audidash_server.web import run_queries as rq
+from audidash_server.web.forms import Form, form_text
 from audidash_server.web.layout import page_context
 
 router = APIRouter(prefix="/plugins")
@@ -35,9 +37,8 @@ def _see_other(url: str) -> RedirectResponse:
     return RedirectResponse(url, status_code=303)
 
 
-async def _digest(request: Request) -> str:
-    raw = (await request.form()).get("manifest_sha256")
-    value = raw if isinstance(raw, str) else ""
+def _digest(form: FormData) -> str:
+    value = form_text(form, "manifest_sha256")
     if not _SHA256.fullmatch(value):
         raise HTTPException(status_code=422, detail="manifest_sha256 inválido")
     return value
@@ -63,8 +64,8 @@ def list_page(request: Request, db: Db, user: CurrentUser, sess: CurrentSession)
 
 
 @router.post("/verify", dependencies=ADMIN)
-async def verify(request: Request, db: Db, user: CurrentUser) -> Response:
-    digest = await _digest(request)
+def verify(db: Db, user: CurrentUser, form: Form) -> Response:
+    digest = _digest(form)
     known = select(VerifiedPlugin.id).where(VerifiedPlugin.manifest_sha256 == digest)
     if db.scalars(known).first() is not None:
         return _see_other("/plugins")  # already on the allowlist: nothing to record
@@ -104,8 +105,8 @@ async def verify(request: Request, db: Db, user: CurrentUser) -> Response:
 
 
 @router.post("/unverify", dependencies=ADMIN)
-async def unverify(request: Request, db: Db, user: CurrentUser) -> Response:
-    digest = await _digest(request)
+def unverify(db: Db, user: CurrentUser, form: Form) -> Response:
+    digest = _digest(form)
     row = db.scalars(select(VerifiedPlugin).where(VerifiedPlugin.manifest_sha256 == digest)).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Manifesto não está na lista de verificados")

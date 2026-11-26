@@ -1,5 +1,6 @@
 """Task 12 hardening carry-overs: sessions vs. disabled/demoted users, Host validation."""
 
+import inspect
 import re
 from typing import Any
 
@@ -8,6 +9,7 @@ from audidash_server.ca import CAError
 from audidash_server.models import EnrollmentToken, Role, User
 from audidash_server.settings import Settings
 from audidash_server.web import device_queries as dq
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
@@ -201,3 +203,30 @@ def test_device_token_not_created_when_ca_unavailable(
         )
     with app_client.app.state.sessionmaker() as s:  # type: ignore[attr-defined]
         assert list(s.scalars(select(EnrollmentToken))) == []
+
+
+def test_db_routes_are_sync_so_blocking_work_runs_in_the_threadpool(
+    app_client: TestClient,
+) -> None:
+    # An `async def` route runs on the event loop: blocking SQLAlchemy / Argon2 calls in it
+    # would stall every other request. Only these coroutine endpoints are allowed: healthz
+    # touches nothing, upload_run streams the body and hands ingestion to the threadpool.
+    allowed = {"healthz", "upload_run"}
+    routes = list(_api_routes(app_client.app.routes))  # type: ignore[attr-defined]
+    assert len(routes) > 30  # the included routers were walked
+    offenders = sorted(
+        f"{route.endpoint.__module__}.{route.endpoint.__name__}"
+        for route in routes
+        if inspect.iscoroutinefunction(route.endpoint) and route.endpoint.__name__ not in allowed
+    )
+    assert offenders == []
+
+
+def _api_routes(routes: Any) -> Any:
+    """Every APIRoute, descending into included routers (FastAPI keeps them nested)."""
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        nested = getattr(route, "original_router", None)
+        if nested is not None:
+            yield from _api_routes(nested.routes)

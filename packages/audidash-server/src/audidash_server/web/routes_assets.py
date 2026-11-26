@@ -23,6 +23,7 @@ from audidash_server.db import get_session
 from audidash_server.models import Asset, Role, Session, User
 from audidash_server.services.assets import AssetCreate
 from audidash_server.web import asset_queries, queries
+from audidash_server.web.forms import Form
 from audidash_server.web.layout import page_context
 
 router = APIRouter(prefix="/assets")
@@ -165,8 +166,10 @@ def new_page(request: Request, user: CurrentUser, sess: CurrentSession) -> Respo
 
 
 @router.post("", dependencies=WRITE)
-async def create(request: Request, db: Db, user: CurrentUser, sess: CurrentSession) -> Response:
-    values = _form_values(await request.form())
+def create(
+    request: Request, db: Db, user: CurrentUser, sess: CurrentSession, form: Form
+) -> Response:
+    values = _form_values(form)
     data, errors = _validate(values)
     if data is not None and _name_taken(db, data.name):
         errors["name"] = DUPLICATE_MESSAGE
@@ -223,11 +226,16 @@ def edit_page(
 
 
 @router.post("/{asset_id}", dependencies=WRITE)
-async def update(
-    asset_id: uuid.UUID, request: Request, db: Db, user: CurrentUser, sess: CurrentSession
+def update(
+    asset_id: uuid.UUID,
+    request: Request,
+    db: Db,
+    user: CurrentUser,
+    sess: CurrentSession,
+    form: Form,
 ) -> Response:
     asset = _get_asset(db, asset_id)
-    values = _form_values(await request.form())
+    values = _form_values(form)
     data, errors = _validate(values)
     if data is not None and _name_taken(db, data.name, exclude=asset.id):
         errors["name"] = DUPLICATE_MESSAGE
