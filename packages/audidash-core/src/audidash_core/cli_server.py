@@ -19,7 +19,7 @@ import httpx
 from audidash_core.cli_format import clean_line, table
 from audidash_core.client import config as client_config
 from audidash_core.client import identity
-from audidash_core.client.api import ApiClient, ApiError, AssetInfo, enroll_device
+from audidash_core.client.api import ApiClient, ApiError, AssetInfo, enroll_device, fetch_ca_pem
 from audidash_core.client.config import ClientConfig, ClientError
 from audidash_core.manifest import TargetType
 from audidash_core.runner import RunResult
@@ -29,11 +29,12 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 ENROLL_HELP = (
     "enrol this device: generate a key and CSR locally and exchange a single-use token for a "
-    "client certificate. Trust model (TOFU): the CA is not known before the first contact, so "
-    "pass the CA fingerprint printed by `audidash-server` via --ca-fingerprint (checked against "
-    "the CA the server returns before anything is saved); without it you must opt in with "
-    "--insecure-first-contact. An interceptor who steals the token can only enrol their own "
-    "device; the private key never leaves this machine."
+    "client certificate. Trust model: the CLI first downloads the public CA certificate "
+    "(/ca.pem) and, with --ca-fingerprint (printed by `audidash-server show-ca-fingerprint`), "
+    "checks it BEFORE sending the token, which then travels only over TLS verified against "
+    "that CA. --insecure-first-contact skips the check after showing the fingerprint and "
+    "asking for confirmation: an interceptor could then capture the token and enrol their "
+    "own device. The private key never leaves this machine."
 )
 
 
@@ -92,6 +93,21 @@ def _authed_client(directory: Path) -> ApiClient:
 # ---------------------------------------------------------------- enroll
 
 
+def _confirm_insecure_ca(fingerprint: str) -> None:
+    """Show the downloaded CA fingerprint and require an explicit "y" before the token leaves."""
+    _say(
+        "WARNING: --insecure-first-contact: the server's identity is not verified. "
+        "Anyone intercepting this connection can read the single-use token and enrol "
+        "their own device in your place. Compare the CA fingerprint below with the one "
+        "the server administrator gave you.",
+        stderr=True,
+    )
+    _say(f"CA certificate SHA-256 fingerprint: {fingerprint}", stderr=True)
+    answer = _prompt(lambda: input("Trust this CA and send the enrolment token? [y/N] "))
+    if answer.strip().lower() not in ("y", "yes"):
+        raise ServerCliError("enrolment aborted: the CA fingerprint was not confirmed")
+
+
 def cmd_enroll(args: argparse.Namespace) -> int:
     dashboard = _https_url(args.server, "--server")
     api = _https_url(args.api, "--api")
@@ -108,20 +124,28 @@ def cmd_enroll(args: argparse.Namespace) -> int:
             "contact, or --insecure-first-contact to accept the risk",
             usage=True,
         )
-    else:
-        _say(
-            "WARNING: --insecure-first-contact: the server's identity is not verified. "
-            "Anyone intercepting this connection can read the single-use token and enrol "
-            "their own device in your place. Compare the CA fingerprint below with the one "
-            "the server administrator gave you.",
-            stderr=True,
-        )
     directory = _directory()
     if client_config.is_enrolled(directory) and not args.force:
         raise ServerCliError(
             f"this device is already enrolled ({directory}); use --force to replace the identity"
         )
 
+    # 1. Download the (public) CA certificate and check it BEFORE anything secret is sent.
+    try:
+        ca_pem = fetch_ca_pem(dashboard, transport=make_transport(directory))
+        actual = identity.cert_fingerprint(ca_pem)
+    except (ClientError, ValueError) as exc:
+        raise ServerCliError(str(exc)) from None
+    if expected is not None:
+        if not hmac.compare_digest(actual, expected):
+            raise ServerCliError(
+                "CA fingerprint mismatch — possible interception; the token was not sent"
+            )
+    else:
+        _confirm_insecure_ca(actual)
+
+    # 2. Only now ask for / send the token: over TLS verified against that CA when it was
+    #    checked against --ca-fingerprint; unverified (explicit opt-in) otherwise.
     token = args.token or _prompt(lambda: getpass.getpass("Enrolment token: ")).strip()
     if not token:
         raise ServerCliError("an enrolment token is required", usage=True)
@@ -132,14 +156,14 @@ def cmd_enroll(args: argparse.Namespace) -> int:
             token=token,
             device_name=args.name,
             csr_pem=identity.build_csr(key, args.name).decode("ascii"),
-            verify_tls=False,  # TOFU: the returned CA is checked below, before saving anything
+            ca_pem=ca_pem if expected is not None else None,
             transport=make_transport(directory),
         )
-        actual = identity.cert_fingerprint(result.ca_pem)
+        returned = identity.cert_fingerprint(result.ca_pem)
     except (ClientError, ValueError) as exc:
         raise ServerCliError(str(exc)) from None
-    if expected is not None and not hmac.compare_digest(actual, expected):
-        raise ServerCliError("CA fingerprint mismatch — possible interception")
+    if not hmac.compare_digest(returned, actual):
+        raise ServerCliError("the server returned a different CA than /ca.pem — nothing saved")
     try:
         identity.check_issued_certificate(result.cert_pem, result.ca_pem, key)
     except ValueError as exc:
@@ -352,7 +376,7 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     enroll.add_argument(
         "--insecure-first-contact",
         action="store_true",
-        help="enrol without verifying the CA (trust on first use; risky)",
+        help="skip the fingerprint check: show the CA fingerprint and ask before sending the token",
     )
     enroll.add_argument("--force", action="store_true", help="replace an existing identity")
     enroll.set_defaults(func=cmd_enroll)

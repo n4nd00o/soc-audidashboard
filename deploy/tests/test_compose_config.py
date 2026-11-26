@@ -182,6 +182,8 @@ def test_caddy_global_options() -> None:
     head = text.split("}", 1)[0]
     assert re.search(r"^\s*admin off\s*$", head, re.M)
     assert "skip_install_trust" in head
+    # IP-literal clients send no SNI; they still get the internal-CA certificate.
+    assert re.search(r"^\s*default_sni localhost\s*$", head, re.M)
 
 
 def test_caddy_strips_client_headers_on_both_listeners(caddy_sites: dict[str, str]) -> None:
@@ -196,7 +198,9 @@ def test_caddy_strips_client_headers_on_both_listeners(caddy_sites: dict[str, st
 
 def test_caddy_dashboard_listener(caddy_sites: dict[str, str]) -> None:
     body = caddy_sites["8443"]
-    assert "tls internal" in body
+    # Issued by the AudiDashboard internal CA (verifiable by `audidash enroll`), not Caddy's.
+    assert "tls /shared/dashboard.crt /shared/dashboard.key" in body
+    assert "tls internal" not in CADDYFILE.read_text(encoding="utf-8")
     assert "client_auth" not in body
     assert "{http.request.tls.client.fingerprint}" not in body
     # Both the bare /api path and everything below it are blocked.
@@ -236,6 +240,64 @@ def test_entrypoint_is_strict_and_execs() -> None:
     assert "check-server-cert" in text
     assert "--min-days 30" in text
     assert "\r" not in text
+    # The dashboard listener gets an internal-CA certificate too, for AUDIDASH_DASHBOARD_HOSTS.
+    assert 'DASHBOARD_HOSTS="${AUDIDASH_DASHBOARD_HOSTS:-localhost,127.0.0.1}"' in text
+    assert 'ensure_server_cert dashboard "$DASHBOARD_HOSTS"' in text
+    assert 'ensure_server_cert api "$API_HOSTS"' in text
+
+
+def test_compose_passes_dashboard_hosts_to_the_server(services: dict[str, dict[str, Any]]) -> None:
+    env = services["server"]["environment"]
+    assert env["AUDIDASH_DASHBOARD_HOSTS"] == "${AUDIDASH_DASHBOARD_HOSTS:-localhost,127.0.0.1}"
+    assert "AUDIDASH_DASHBOARD_HOST" not in services["proxy"]["environment"]
+    assert "AUDIDASH_DASHBOARD_HOSTS" in ENV_EXAMPLE.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="POSIX sh not available")
+def test_entrypoint_issues_and_revalidates_both_listener_certs(tmp_path: Path) -> None:
+    """Run the real entrypoint with a stub `audidash-server` that logs its arguments."""
+    bin_dir, data = tmp_path / "bin", tmp_path / "data"
+    bin_dir.mkdir()
+    (data / "ca").mkdir(parents=True)
+    (data / "ca" / "ca.crt").write_text("CA", encoding="utf-8")
+    (data / "proxy").mkdir()
+    (data / "proxy" / "api.key").write_text("k", encoding="utf-8")
+    (data / "proxy" / "dashboard.key").write_text("k", encoding="utf-8")
+    log = tmp_path / "calls.log"
+    stub = (
+        "#!/bin/sh\n"
+        f'echo "$*" >> "{log.as_posix()}"\n'
+        'case "$1" in check-server-cert) case "$*" in *dashboard*) exit 1;; esac;; esac\n'
+        "exit 0\n"
+    )
+    for name in ("audidash-server", "python"):
+        (bin_dir / name).write_text(stub, encoding="utf-8", newline="\n")
+        (bin_dir / name).chmod(0o755)
+    sh = shutil.which("sh")
+    assert sh is not None
+    result = subprocess.run(  # noqa: S603 - fixed argument list, no shell
+        [sh, ENTRYPOINT.as_posix(), "true"],
+        env={
+            "PATH": f"{bin_dir.as_posix()}:/usr/bin:/bin",
+            "AUDIDASH_DATA_DIR": data.as_posix(),
+            "AUDIDASH_DATABASE_URL": "sqlite://",
+            "AUDIDASH_DASHBOARD_HOSTS": "dash.lan,10.0.0.5",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    proxy = (data / "proxy").as_posix()
+    # The current API certificate is kept; the stale dashboard one is reissued for its hosts.
+    assert not any(c.startswith(f"issue-server-cert --out-cert {proxy}/api.crt") for c in calls)
+    assert (
+        f"issue-server-cert --out-cert {proxy}/dashboard.crt --out-key {proxy}/dashboard.key "
+        "--host dash.lan --host 10.0.0.5"
+    ) in calls
+    assert (data / "proxy" / "ca.crt").read_text(encoding="utf-8") == "CA"
 
 
 def test_ci_smoke_job_checks() -> None:
@@ -245,6 +307,11 @@ def test_ci_smoke_job_checks() -> None:
     assert "--wait" in script
     assert "https://localhost:9443/api/v1/assets" in script
     assert "checkend 0" in script  # the lab certificate must really be expired
+    # The dashboard listener is verified against the internal CA, never with curl -k.
+    assert "--cacert" in script and "https://localhost:8443/healthz" in script
+    assert "-fsSk" not in script and "-sk " not in script
+    assert "openssl s_client -connect localhost:8443" in script
+    assert "openssl s_client -connect 127.0.0.1:8443" in script  # no SNI: default_sni
     # Piped assertions break under `bash -eo pipefail` (SIGPIPE / non-zero producers).
     for line in script.splitlines():
         assert "| grep" not in line, line

@@ -51,6 +51,7 @@ services:
       AUDIDASH_PUBLIC_DASHBOARD_URL: ${AUDIDASH_PUBLIC_DASHBOARD_URL:-https://localhost:8443}
       AUDIDASH_PUBLIC_API_URL: ${AUDIDASH_PUBLIC_API_URL:-https://localhost:9443}
       AUDIDASH_API_HOSTS: ${AUDIDASH_API_HOSTS:-localhost,127.0.0.1}
+      AUDIDASH_DASHBOARD_HOSTS: ${AUDIDASH_DASHBOARD_HOSTS:-localhost,127.0.0.1}
     volumes:
       - server_data:/data
       - proxy_shared:/data/proxy
@@ -70,14 +71,13 @@ services:
         condition: service_healthy
     environment:
       AUDIDASH_PROXY_SECRET: ${AUDIDASH_PROXY_SECRET:?set AUDIDASH_PROXY_SECRET in .env}
-      AUDIDASH_DASHBOARD_HOST: ${AUDIDASH_DASHBOARD_HOST:-localhost}
       XDG_DATA_HOME: /caddy/data
       XDG_CONFIG_HOME: /caddy/config
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - proxy_shared:/shared:ro
     tmpfs:
-      # Caddy's internal CA for :8443 lives here (regenerated on restart).
+      # Caddy's runtime data/config (autosave); both listeners use internal-CA certificates.
       - /caddy:uid=10001,gid=10001,mode=0700
       - /tmp
     ports:

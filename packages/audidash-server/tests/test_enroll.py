@@ -4,7 +4,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from audidash_server.api.deps import client_ip
+from audidash_server.api.deps import client_ip, get_ca
 from audidash_server.models import ApiToken, AuditEntry, Device, EnrollmentToken, Role, User
 from audidash_server.settings import Settings
 from cryptography import x509
@@ -323,3 +323,24 @@ def test_create_asset_viewer_forbidden(make_api_user: Any) -> None:
     api = make_api_user("vic", Role.viewer)
     assert api.post("/api/v1/assets", ASSET).status_code == 403
     assert api.get("/api/v1/assets").status_code == 200
+
+
+# --- CA download (first contact) -----------------------------------------------------------
+
+
+def test_ca_pem_is_public_uncached_and_is_the_enrollment_ca(
+    app_client: TestClient, issue_enrollment_token: Any, csr: Any
+) -> None:
+    r = app_client.get("/ca.pem")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/x-pem-file")
+    assert r.headers["cache-control"] == "no-store"
+    cert = x509.load_pem_x509_certificate(r.content)
+    enrolled = _enroll(app_client, issue_enrollment_token(), csr()).json()
+    assert r.text == enrolled["ca_pem"]
+    digest = hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
+    assert digest == get_ca(_app_request(app_client)).fingerprint_sha256()
+
+
+def _app_request(client: TestClient) -> Request:
+    return Request({"type": "http", "app": client.app, "headers": []})

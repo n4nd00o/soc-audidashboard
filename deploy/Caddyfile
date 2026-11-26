@@ -5,12 +5,15 @@
 	skip_install_trust
 	# Only the two HTTPS listeners below; no :80 redirect listener.
 	auto_https disable_redirects
+	# Clients connecting to an IP literal send no SNI: serve the "localhost" certificate.
+	default_sni localhost
 }
 
-# Dashboard + device enrolment (/enroll). Caddy's own internal CA; clients enrol with TOFU on
-# the AudiDashboard CA fingerprint returned by /enroll, so this certificate is not pinned.
-{$AUDIDASH_DASHBOARD_HOST:localhost}:8443 {
-	tls internal
+# Dashboard + device enrolment (/ca.pem, /enroll). Server certificate issued by the
+# AudiDashboard internal CA for AUDIDASH_DASHBOARD_HOSTS: `audidash enroll --ca-fingerprint`
+# checks /ca.pem against the fingerprint, then sends the token only over TLS verified by it.
+:8443 {
+	tls /shared/dashboard.crt /shared/dashboard.key
 	header -Server
 
 	# Client-supplied copies of the trust headers are always discarded.
