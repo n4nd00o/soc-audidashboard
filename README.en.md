@@ -22,18 +22,32 @@ and recommendations.
 ## Architecture
 
 ```
-┌──────────── Analyst machine ────────────────┐          ┌──────── Central server (docker compose) ──────────┐
-│ Desktop app (PySide6)                       │  mTLS    │ Reverse proxy (TLS 1.3 + cert verification)       │
-│  ├ plugin catalog / view source code        │ ───────► │ FastAPI API  /api/v1  (ingestion, catalog)       │
-│  ├ targets (synced from the server)         │  HTTPS   │ FastAPI+HTMX dashboard (session + MFA) ◄── browser
-│  ├ runner (isolated subprocess, timeout)    │          │ PostgreSQL (findings, assets, users, audit log)   │
-│  ├ sanitizer (strips secrets/PII)           │          │ Internal CA (issues device certificates)          │
-│  └ credentials → OS keyring (never uploaded)│          └───────────────────────────────────────────────────┘
-└─────────────────────────────────────────────┘
-        │ SSH / WinRM / cloud APIs / network
-        ▼
-   Targets: Linux, Windows, AWS, Azure, GCP, M365, network, web
+┌──── Analyst machine ─────────┐            ┌──────────── Server (docker compose) ──────────────────────┐
+│ `audidash` CLI (today)       │            │ Caddy                                                      │
+│  ├ signed catalog / plugins  │  mTLS      │  ├ :9443  device API (mutual TLS required)                 │
+│  ├ runner (subprocess,       │ ─────────► │  └ :8443  dashboard + /enroll (TLS, no /api)   ◄── browser │
+│  │  timeout, no shell)       │  :9443     │        │ internal network + proxy secret                   │
+│  ├ sanitizer (secrets/PII)   │            │ FastAPI + HTMX app (API /api/v1, dashboard, session + TOTP)│
+│  └ device certificate (CA)   │            │        │                                                   │
+└──────────────────────────────┘            │ PostgreSQL (assets, findings, runs, users, audit log)      │
+        │ network                           │ Internal CA (EC P-256, issues device certificates)         │
+        ▼                                   └────────────────────────────────────────────────────────────┘
+   Audited targets (web, TLS, ports, ...)
 ```
+
+What exists today (`0.2.0-alpha.1`):
+
+- **Server** (`packages/audidash-server`): ingestion API (`/api/v1`, with deduplication and
+  auto-resolution of findings) and a FastAPI + HTMX **dashboard**: overview (SVG gauge and
+  trend), assets, findings with a lifecycle, runs, plugin allow-list, devices/enrolment tokens,
+  users and an audit-log viewer.
+- **Authentication**: Argon2id, mandatory TOTP, account lockout, rate limiting, sessions with
+  CSRF and roles (RBAC); hash-chained audit log (`audit verify`).
+- **Devices**: internal CA, enrolment with a single-use token + CA fingerprint check, mTLS
+  terminated at Caddy (`deploy/`).
+- **Client** (`packages/audidash-core`): `audidash enroll | login | assets | run --upload | demo
+  | plugins list --sync-verified`.
+- **Not there yet**: desktop app and remote execution (see the Roadmap).
 
 ## Trust root
 
@@ -48,37 +62,71 @@ The project *aligns with* ISO/IEC 27001/27002 controls and LGPD principles (mini
 sanitization at the source, security by design). This is **not** a certification or legal
 advice; it is a design reference only.
 
-## Quickstart (CLI only for now)
+## 5-minute demo
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requires **Docker** (Compose v2), Python 3.12+ and [uv](https://docs.astral.sh/uv/). Everything
+runs on `localhost`; the lab targets are **intentionally vulnerable** and bound to `127.0.0.1`.
+Details and ports in [`deploy/README.md`](deploy/README.md).
 
 ```bash
 git clone https://github.com/n4nd00o/soc-audidashboard.git
 cd soc-audidashboard
 uv sync
-uv run pytest -q
 
-# CLI
+# 1. secrets (URL-safe, >= 32 characters): replace every CHANGE_ME with a value from
+#    python -c "import secrets;print(secrets.token_urlsafe(48))"
+cp deploy/.env.example deploy/.env
+
+# 2. start the stack (PostgreSQL + server + Caddy + 3 lab targets)
+docker compose -f deploy/docker-compose.yml up -d --build
+
+# 3. admin account (asks for a password and shows the TOTP secret)
+docker compose -f deploy/docker-compose.yml exec server audidash-server create-admin --username admin
+
+# 4. internal CA fingerprint and enrolment token (shown only once)
+docker compose -f deploy/docker-compose.yml exec server audidash-server show-ca-fingerprint
+docker compose -f deploy/docker-compose.yml exec server audidash-server create-enrollment-token --created-by admin
+
+# 5. on the host: enrol this machine, log in and run the demo against the lab targets
+uv run audidash enroll --server https://localhost:8443 --api https://localhost:9443 \
+    --name my-laptop --token=<TOKEN> --ca-fingerprint <SHA-256>
+uv run audidash login
+uv run audidash demo
+```
+
+Open <https://localhost:8443> (browsers warn about Caddy's internal CA), sign in with the admin
+account and TOTP code, and browse assets, findings and runs. To wipe everything:
+`docker compose -f deploy/docker-compose.yml down -v`.
+
+> Planned screenshots (not added yet): see [`docs/img/README.md`](docs/img/README.md).
+
+## Local development
+
+```bash
+uv sync
+uv run pytest -q
 uv run audidash plugins list
 uv run audidash plugins show http-security-headers
 uv run audidash run http-security-headers --target example.com --target-type web \
     --param url=https://example.com --yes
 ```
 
-Credentials are **not** accepted on the command line (they would leak into shell history and argv);
-credential input arrives with the desktop app (OS keyring).
+Credentials are **not** accepted on the command line (they would leak into shell history and
+argv). The server test suite uses SQLite by default; CI also runs it against PostgreSQL
+(`AUDIDASH_TEST_DATABASE_URL`).
 
 ## How to write a plugin
 
 Plugins are scripts in any language with a manifest and JSON output. See the guide at
-[`docs/plugins.md`](docs/plugins.md) (to be created in Plan 1, Task 7).
+[`docs/plugins.en.md`](docs/plugins.en.md).
 
 ## Roadmap
 
-- **Plan 1** — foundation and core (`audidash-core`: schemas, runner, sanitizer, scoring, SDK).
-- **Plan 2** — server (FastAPI API, database, mTLS).
-- **Plan 3** — web dashboard (FastAPI + HTMX, MFA login).
-- **Plan 4** — desktop app (PySide6) and demo environment.
+- **Plan 1** (`0.1.0-alpha.1`): foundation and core (schemas, runner, sanitizer, scoring, SDK, CLI).
+- **Plan 2** (`0.2.0-alpha.1`): server and dashboard (API, PostgreSQL, internal CA and mTLS, MFA,
+  audit log, Docker Compose demo).
+- **Plan 3**: desktop app (PySide6) reusing the CLI client.
+- **Plan 4**: remote execution (SSH/WinRM) and Linux/Windows plugins.
 
 ## Contributing and security
 

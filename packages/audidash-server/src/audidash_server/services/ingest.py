@@ -240,7 +240,7 @@ def ingest_run(
         "asset_score": asset_score(scored, asset.criticality),
     }
     run = db.get(Run, run_id)
-    assert run is not None  # noqa: S101 - inserted above in this transaction
+    assert run is not None  # noqa: S101 - inserted above in this transaction  # nosec B101
     run.ingest_summary = summary
     audit.record(
         db,

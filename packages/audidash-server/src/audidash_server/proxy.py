@@ -13,7 +13,7 @@ from fastapi import Request
 
 from audidash_server.settings import Settings
 
-PROXY_SECRET_HEADER = "X-Audidash-Proxy-Secret"  # noqa: S105 - header name, not a secret
+PROXY_SECRET_HEADER = "X-Audidash-Proxy-Secret"  # noqa: S105 - header name, not a secret  # nosec B105
 CLIENT_CERT_HEADER = "X-Client-Cert-Fingerprint"
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 _SEPARATORS = re.compile(r"[:\s]")

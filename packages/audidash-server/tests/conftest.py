@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 import uuid
 from collections.abc import Callable, Iterator
@@ -14,8 +15,8 @@ from audidash_server import clock
 from audidash_server.app import create_app
 from audidash_server.auth.passwords import hash_password
 from audidash_server.auth.totp import encrypt_totp_secret, totp_secret_new
-from audidash_server.db import init_db, make_engine
-from audidash_server.models import Role, User
+from audidash_server.db import init_db, make_engine, run_migrations
+from audidash_server.models import Base, Role, User
 from audidash_server.services.enrollment import create_enrollment_token
 from audidash_server.settings import Settings
 from cryptography import x509
@@ -24,21 +25,59 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from sqlalchemy import text
 from sqlalchemy.orm import Session as DbSession
 
 TEST_PASSWORD = "Corr3ct-Horse-Battery-Staple"  # noqa: S105 - test fixture value
 _CSRF_FIELD = re.compile(r'name="csrf_token" value="([^"]+)"')
 
 
+# When set (CI `server-postgres` job), the suite runs against this PostgreSQL database instead
+# of a per-test SQLite file. Isolation: the schema is created ONCE per session through the real
+# Alembic migrations, and every test starts by TRUNCATE-ing all tables (RESTART IDENTITY CASCADE).
+# The database must be disposable and used by one pytest process at a time.
+TEST_DATABASE_URL = os.environ.get("AUDIDASH_TEST_DATABASE_URL", "")
+
+
+@pytest.fixture(scope="session")
+def _pg_schema() -> str:
+    if not TEST_DATABASE_URL:
+        return ""
+    engine = make_engine(TEST_DATABASE_URL)
+    try:
+        # Start from a clean slate, then build the schema exactly as production does.
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+    finally:
+        engine.dispose()
+    run_migrations(TEST_DATABASE_URL)
+    return TEST_DATABASE_URL
+
+
+def _truncate_all(url: str) -> None:
+    engine = make_engine(url)
+    try:
+        tables = list(Base.metadata.sorted_tables)
+        if not tables:
+            return
+        names = ", ".join(f'"{t.name}"' for t in tables)
+        with engine.begin() as conn:
+            conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))  # noqa: S608
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def settings(tmp_path: Path, _pg_schema: str) -> Settings:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    return Settings(
-        dev_mode=True,
-        data_dir=data_dir,
-        database_url=f"sqlite:///{(tmp_path / 'audidash.db').as_posix()}",
-    )
+    if _pg_schema:
+        _truncate_all(_pg_schema)
+        url = _pg_schema
+    else:
+        url = f"sqlite:///{(tmp_path / 'audidash.db').as_posix()}"
+    return Settings(dev_mode=True, data_dir=data_dir, database_url=url)
 
 
 @pytest.fixture

@@ -99,7 +99,7 @@ def login_form(request: Request) -> Response:
 
 
 @router.post("/login")
-def login_submit(
+def login_submit(  # nosec B107
     request: Request,
     db: Db,
     username: FormStr = "",
@@ -173,7 +173,7 @@ def totp_setup_form(request: Request, db: Db) -> Response:
 
 
 @router.post("/totp/setup")
-def totp_setup_submit(
+def totp_setup_submit(  # nosec B107
     request: Request,
     db: Db,
     code: FormStr = "",
