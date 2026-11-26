@@ -65,6 +65,42 @@ jobs:
       - name: Validate bundled plugins
         run: uv run audidash plugins validate plugins
 
+  server-postgres:
+    name: server tests (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16.11-alpine
+        env:
+          POSTGRES_USER: audidash
+          POSTGRES_PASSWORD: audidash-ci
+          POSTGRES_DB: audidash_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U audidash -d audidash_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Disposable database: the fixtures drop and recreate its `public` schema, run the Alembic
+      # migrations once per session and TRUNCATE every table between tests.
+      AUDIDASH_TEST_DATABASE_URL: postgresql+psycopg://audidash:audidash-ci@localhost:5432/audidash_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install (locked)
+        run: uv sync --locked
+
+      - name: Server test suite against PostgreSQL
+        run: uv run pytest packages/audidash-server -q
+
   compose-smoke:
     name: compose smoke (Caddy mTLS + demo lab)
     runs-on: ubuntu-latest
