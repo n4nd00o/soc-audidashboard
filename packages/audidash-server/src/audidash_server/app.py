@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import jinja2
@@ -46,11 +48,19 @@ class _OutermostHeadersFastAPI(FastAPI):
         return SecurityHeadersMiddleware(super().build_middleware_stack())
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """On shutdown, close the engine's pooled connections (no idle sessions left on the DB)."""
+    yield
+    app.state.engine.dispose()
+
+
 def create_app(settings: Settings) -> FastAPI:
     docs = settings.dev_mode
     if not settings.dev_mode:
         settings.validate_for_production()
     app = _OutermostHeadersFastAPI(
+        lifespan=_lifespan,
         title="SOC AudiDashboard",
         version=__version__,
         docs_url="/docs" if docs else None,

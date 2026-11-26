@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,3 +29,15 @@ def test_app_factory_refuses_missing_production_secrets(
         monkeypatch.delenv(f"AUDIDASH_{name}", raising=False)
     with pytest.raises(ValueError, match="AUDIDASH_SECRET_KEY is missing"):
         app_factory()
+
+
+def test_app_shutdown_disposes_the_engine(settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from audidash_server.app import create_app
+
+    app = create_app(settings)
+    disposed: list[bool] = []
+    monkeypatch.setattr(app.state.engine, "dispose", lambda close=True: disposed.append(close))
+    with TestClient(app, base_url="https://testserver") as client:
+        assert client.get("/healthz").status_code == 200
+        assert disposed == []
+    assert disposed == [True]

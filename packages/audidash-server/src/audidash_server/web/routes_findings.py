@@ -20,6 +20,7 @@ from audidash_server.db import get_session
 from audidash_server.models import Asset, FindingRecord, Role, Session, User
 from audidash_server.services import lifecycle
 from audidash_server.web import finding_queries as fq
+from audidash_server.web.forms import Form, form_text
 from audidash_server.web.layout import page_context
 
 router = APIRouter(prefix="/findings")
@@ -166,13 +167,17 @@ def _error_response(
 
 
 @router.post("/{finding_id}/status", dependencies=WRITE)
-async def change_status(
-    finding_id: uuid.UUID, request: Request, db: Db, user: CurrentUser, sess: CurrentSession
+def change_status(
+    finding_id: uuid.UUID,
+    request: Request,
+    db: Db,
+    user: CurrentUser,
+    sess: CurrentSession,
+    form: Form,
 ) -> Response:
     rec = _get_finding(db, finding_id)
-    form = await request.form()
-    raw_to = str(form.get("to") or "")
-    raw_justification = str(form.get("justification") or "")
+    raw_to = form_text(form, "to")
+    raw_justification = form_text(form, "justification")
 
     def fail(code: int, message: str) -> Response:
         return _error_response(

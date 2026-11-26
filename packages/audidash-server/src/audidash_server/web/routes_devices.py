@@ -21,6 +21,7 @@ from audidash_server.services.enrollment import ENROLLMENT_TOKEN_TTL, create_enr
 from audidash_server.settings import Settings
 from audidash_server.textguard import without_nul
 from audidash_server.web import device_queries as dq
+from audidash_server.web.forms import Form, form_text
 from audidash_server.web.layout import page_context
 
 router = APIRouter(prefix="/devices")
@@ -82,11 +83,10 @@ def list_page(request: Request, db: Db, user: CurrentUser, sess: CurrentSession)
 
 
 @router.post("/tokens", dependencies=ADMIN)
-async def create_token(
-    request: Request, db: Db, user: CurrentUser, sess: CurrentSession
+def create_token(
+    request: Request, db: Db, user: CurrentUser, sess: CurrentSession, form: Form
 ) -> Response:
-    raw = (await request.form()).get("name")
-    name = raw.strip() if isinstance(raw, str) else ""
+    name = form_text(form, "name").strip()
     if not dq.DEVICE_NAME.fullmatch(name):
         return _render_page(
             request,

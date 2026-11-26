@@ -248,7 +248,8 @@ def test_plugins_verify_and_unverify_persist_with_audit(app_client: TestClient, 
     assert _all(app_client, VerifiedPlugin) == []
     (gone,) = _audit(app_client, "plugin.unverify")
     assert gone.details["manifest_sha256"] == HASH_A
-    assert audit.verify_chain(_db(app_client)) is None
+    with _db(app_client) as s:
+        assert audit.verify_chain(s) is None
 
 
 def test_plugins_verify_rejects_bad_or_unseen_hash(app_client: TestClient, admin: str) -> None:
