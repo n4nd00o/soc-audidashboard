@@ -1,0 +1,10 @@
+# Build context for Dockerfile.server is the repository root: send only what the build needs.
+*
+!pyproject.toml
+!uv.lock
+!packages/
+!deploy/entrypoint.sh
+**/__pycache__
+**/*.py[cod]
+**/tests/
+**/.pytest_cache

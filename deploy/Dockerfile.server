@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+# SOC AudiDashboard server image. Build context: repository root.
+#   docker build -f deploy/Dockerfile.server .
+
+FROM ghcr.io/astral-sh/uv:0.12.0 AS uv
+
+FROM python:3.12.12-slim AS builder
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON=/usr/local/bin/python3 \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+WORKDIR /src
+# Every workspace member's pyproject.toml must be present for the lockfile to resolve.
+COPY pyproject.toml uv.lock ./
+COPY packages/ packages/
+RUN uv sync --frozen --no-dev --package audidash-server --no-editable
+
+FROM python:3.12.12-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/app/.venv/bin:$PATH \
+    AUDIDASH_DATA_DIR=/data
+RUN groupadd --system --gid 10001 audidash \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home \
+       --home-dir /nonexistent --shell /usr/sbin/nologin audidash \
+    && mkdir -p /data/proxy \
+    && chown -R 10001:10001 /data \
+    && chmod 0700 /data /data/proxy
+COPY --from=builder /app/.venv /app/.venv
+COPY --chmod=0755 deploy/entrypoint.sh /app/entrypoint.sh
+WORKDIR /app
+USER 10001:10001
+VOLUME ["/data"]
+EXPOSE 8000
+HEALTHCHECK --interval=10s --timeout=5s --start-period=40s --retries=5 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
+ENTRYPOINT ["/app/entrypoint.sh"]
+# No --proxy-headers: X-Forwarded-For is trusted by the app only with the proxy secret.
+CMD ["uvicorn", "--factory", "audidash_server.asgi:app_factory", "--host", "0.0.0.0", "--port", "8000", "--no-server-header", "--no-proxy-headers"]
