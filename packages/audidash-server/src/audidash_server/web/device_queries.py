@@ -102,13 +102,30 @@ def list_tokens(db: DbSession) -> list[TokenRow]:
     return result
 
 
-def default_urls(base_url: str) -> tuple[str, str]:
-    """(dashboard URL, API URL) derived from the request: same origin, API on port 9443."""
-    parts = urlsplit(base_url)
-    host = parts.hostname or "localhost"
-    if ":" in host:
-        host = f"[{host}]"  # IPv6 literal
-    return f"{parts.scheme}://{parts.netloc}", f"{parts.scheme}://{host}:{API_PORT}"
+PLACEHOLDER_DASHBOARD = "https://<servidor>:8443"
+PLACEHOLDER_API = "https://<servidor>:9443"
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOST_RE = re.compile(
+    rf"(?P<host>{_LABEL}(?:\.{_LABEL})*|\[[0-9A-Fa-f:.]{{2,45}}\])(?::[0-9]{{1,5}})?"
+)
+
+
+def default_urls(base_url: str) -> tuple[str, str, bool]:
+    """(dashboard URL, API URL, derived_ok) from the request: same origin, API on port 9443.
+
+    The Host header is attacker-controlled and ends up in a command the admin pastes into a
+    shell, so only a plain hostname / IPv4 / [IPv6] with an optional port is accepted;
+    anything else yields the placeholders and ``derived_ok=False``.
+    """
+    try:
+        parts = urlsplit(base_url)
+    except ValueError:
+        return PLACEHOLDER_DASHBOARD, PLACEHOLDER_API, False
+    match = _HOST_RE.fullmatch(parts.netloc)
+    if parts.scheme not in ("http", "https") or match is None:
+        return PLACEHOLDER_DASHBOARD, PLACEHOLDER_API, False
+    api = f"{parts.scheme}://{match['host']}:{API_PORT}"
+    return f"{parts.scheme}://{parts.netloc}", api, True
 
 
 def enroll_command(

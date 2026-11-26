@@ -29,6 +29,10 @@ CurrentUser = Annotated[User, Depends(current_user)]
 CurrentSession = Annotated[Session, Depends(current_session)]
 ADMIN = [require_role(Role.admin), Depends(csrf_protect)]
 
+URL_WARNING = (
+    "Não foi possível derivar a URL do servidor a partir do cabeçalho Host: configure "
+    "AUDIDASH_PUBLIC_DASHBOARD_URL e AUDIDASH_PUBLIC_API_URL e substitua <servidor> abaixo."
+)
 NAME_MESSAGE = (
     "Nome do dispositivo inválido: use de 1 a 128 caracteres entre letras, números, ponto, "
     "hífen, sublinhado e espaço (começando por letra ou número)."
@@ -87,7 +91,8 @@ async def create_token(
             request, db, user, sess, status_code=422, error=NAME_MESSAGE, name_value=name[:128]
         )
     settings: Settings = request.app.state.settings
-    default_dashboard, default_api = dq.default_urls(str(request.base_url))
+    default_dashboard, default_api, derived_ok = dq.default_urls(str(request.base_url))
+    ca_fingerprint = get_ca(request).fingerprint_sha256()  # fail before committing a token
     token = create_enrollment_token(db, user.id)
     expires_at = clock.now() + ENROLLMENT_TOKEN_TTL
     audit.record(
@@ -104,9 +109,14 @@ async def create_token(
         api_url=settings.public_api_url or default_api,
         token=token,
         name=name,
-        ca_fingerprint=get_ca(request).fingerprint_sha256(),
+        ca_fingerprint=ca_fingerprint,
     )
-    return _render_page(request, db, user, sess, new_command=command)
+    url_warning = (
+        None
+        if derived_ok or (settings.public_dashboard_url and settings.public_api_url)
+        else URL_WARNING
+    )
+    return _render_page(request, db, user, sess, new_command=command, url_warning=url_warning)
 
 
 @router.post("/{device_id}/revoke", dependencies=ADMIN)

@@ -200,8 +200,15 @@ def sync_verified() -> frozenset[str]:
 
 
 def cached_verified() -> frozenset[str]:
-    """The allowlist from the last `plugins list --sync-verified` (empty when never synced)."""
-    return client_config.load_verified(_directory())
+    """Allowlist from the last `plugins list --sync-verified` (empty if never synced or >24 h)."""
+    hashes, stale = client_config.load_verified(_directory())
+    if stale:
+        print(
+            "warning: cached verified-plugin list is older than 24 h and was ignored; "
+            "run `audidash plugins list --sync-verified` to refresh it",
+            file=sys.stderr,
+        )
+    return hashes
 
 
 # ---------------------------------------------------------------- run --upload

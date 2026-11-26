@@ -9,6 +9,7 @@
   <div role="status">
     <h2>Token de inscrição criado</h2>
     <p class="hint">O token é exibido <strong>uma única vez</strong>, vale por 24 horas e só pode ser usado uma vez. Copie o comando abaixo e execute-o no dispositivo.</p>
+    {% if url_warning %}<p class="error" role="alert">{{ url_warning }}</p>{% endif %}
     <pre class="evidence" id="enroll-command">{{ new_command }}</pre>
   </div>
   {% endif %}

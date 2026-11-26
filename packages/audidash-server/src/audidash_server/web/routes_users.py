@@ -7,7 +7,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 from starlette.responses import RedirectResponse, Response
@@ -70,12 +70,9 @@ def _render_page(
 
 
 def _active_admins(db: DbSession) -> int:
-    query = (
-        select(func.count())
-        .select_from(User)
-        .where(User.role == Role.admin, User.disabled.is_(False))
-    )
-    return db.scalar(query) or 0
+    """Count active admins, row-locking them so concurrent demotions serialise (PostgreSQL)."""
+    query = select(User.id).where(User.role == Role.admin, User.disabled.is_(False))
+    return len(db.scalars(query.with_for_update()).all())
 
 
 def _get_user(db: DbSession, user_id: uuid.UUID) -> User:
