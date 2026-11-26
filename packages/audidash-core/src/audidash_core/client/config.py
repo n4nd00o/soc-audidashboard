@@ -14,7 +14,7 @@ import re
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from platformdirs import user_config_dir
@@ -153,20 +153,30 @@ def load_token(directory: Path) -> str:
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
+VERIFIED_MAX_AGE = timedelta(hours=24)
+
+
 def save_verified(directory: Path, hashes: Iterable[str]) -> None:
     """Cache the server's verified-manifest allowlist (last successful sync)."""
     ensure_private_dir(directory)
-    body = {"manifest_sha256": sorted(set(hashes))}
+    body = {"manifest_sha256": sorted(set(hashes)), "fetched_at": utcnow().isoformat()}
     write_private(directory / "verified.json", json.dumps(body).encode("utf-8"))
 
 
-def load_verified(directory: Path) -> frozenset[str]:
-    """Cached allowlist; empty when missing or unreadable (never an error)."""
+def load_verified(directory: Path) -> tuple[frozenset[str], bool]:
+    """Cached allowlist and whether it is stale (older than 24 h).
+
+    A stale cache yields an empty set (a revoked plugin must not stay trusted offline).
+    Missing, corrupt or undated caches are ignored silently: ``(frozenset(), False)``.
+    """
     try:
         body = json.loads((directory / "verified.json").read_text(encoding="utf-8"))
         items = body["manifest_sha256"]
+        fetched_at = datetime.fromisoformat(body["fetched_at"])
     except (OSError, ValueError, KeyError, TypeError):
-        return frozenset()
-    if not isinstance(items, list):
-        return frozenset()
-    return frozenset(i for i in items if isinstance(i, str) and _SHA256_HEX.fullmatch(i))
+        return frozenset(), False
+    if not isinstance(items, list) or fetched_at.tzinfo is None:
+        return frozenset(), False
+    if utcnow() - fetched_at > VERIFIED_MAX_AGE:
+        return frozenset(), True
+    return frozenset(i for i in items if isinstance(i, str) and _SHA256_HEX.fullmatch(i)), False

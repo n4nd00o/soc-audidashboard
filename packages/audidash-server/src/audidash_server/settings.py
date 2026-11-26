@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -13,6 +14,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger(__name__)
 
 MIN_SECRET_LENGTH = 32
+# RFC 3986 unreserved + the sub-delims/gen-delims legitimately used in host, port and path.
+# Excludes shell metacharacters such as $ ` ; ' " ( ) & | < > \ and whitespace.
+_URL_SAFE = re.compile(r"[A-Za-z0-9\-._~:/\[\]@%+=,]*")
 _SECRET_FIELDS = ("secret_key", "proxy_secret", "ca_passphrase")
 
 
@@ -47,9 +51,11 @@ class Settings(BaseSettings):
             or parts.password
             or parts.query
             or parts.fragment
-            or any(ch.isspace() or ord(ch) < 32 for ch in value)
+            or _URL_SAFE.fullmatch(value) is None
         ):
-            raise ValueError("must be an https:// URL without credentials, query or whitespace")
+            raise ValueError(
+                "must be an https:// URL without credentials, query, whitespace or shell characters"
+            )
         return value.rstrip("/")
 
     @model_validator(mode="after")

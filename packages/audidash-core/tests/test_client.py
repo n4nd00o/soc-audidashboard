@@ -648,7 +648,8 @@ def test_sync_verified_marks_allowlisted_plugin_and_caches(
     assert _list(plugins, "--sync-verified") == 0
     assert "verified" in capsys.readouterr().out
     cache = json.loads((ready.config_dir / "verified.json").read_text())
-    assert cache == {"manifest_sha256": [digest]}
+    assert cache["manifest_sha256"] == [digest]
+    assert "fetched_at" in cache
     assert _list(plugins) == 0  # the cache is for `run`; plain list stays unchanged
     assert "community" in capsys.readouterr().out
 
@@ -671,10 +672,76 @@ def test_tampered_plugin_is_not_verified_by_cached_hash(
 ) -> None:
     _allow(ready, plugins)
     assert _list(plugins, "--sync-verified") == 0
+    # Edited manifest: its hash is no longer allowlisted, so the plugin falls back to community.
+    manifest = plugins / "demo-plugin" / "plugin.yaml"
+    manifest.write_bytes(manifest.read_bytes() + b"\n# tampered\n")
+    capsys.readouterr()
+    assert _run(plugins, "--json") == 0
+    assert json.loads(capsys.readouterr().out)["trust"] == "community"
+
+
+def test_tampered_plugin_file_is_refused_not_run_as_verified(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _allow(ready, plugins)
+    assert _list(plugins, "--sync-verified") == 0
     (plugins / "demo-plugin" / "run.py").write_bytes(b"print('evil')\n")
     capsys.readouterr()
+    assert _run(plugins, "--json") == 1
+    captured = capsys.readouterr()
+    assert "verified" not in captured.out
+    assert "do not match plugin.yaml; plugin was not run" in captured.err
     assert _list(plugins) == 0
     assert "verified" not in capsys.readouterr().out.replace("unverified", "")
+
+
+def _age_cache(env: Env, hours: float) -> None:
+    path = env.config_dir / "verified.json"
+    body = json.loads(path.read_text())
+    stamp = dt.datetime.fromisoformat(body["fetched_at"]) - dt.timedelta(hours=hours)
+    body["fetched_at"] = stamp.isoformat()
+    path.write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_run_ignores_stale_cache_with_warning(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _allow(ready, plugins)
+    assert _list(plugins, "--sync-verified") == 0
+    _age_cache(ready, 25)
+    capsys.readouterr()
+    assert _run(plugins, "--json") == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["trust"] == "community"
+    assert "older than 24 h" in captured.err
+    assert "--sync-verified" in captured.err
+
+
+def test_run_uses_fresh_cache_without_warning(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _allow(ready, plugins)
+    assert _list(plugins, "--sync-verified") == 0
+    _age_cache(ready, 23)
+    capsys.readouterr()
+    assert _run(plugins, "--json") == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["trust"] == "verified"
+    assert "older than 24 h" not in captured.err
+
+
+def test_cache_without_fetched_at_is_ignored_silently(
+    ready: Env, plugins: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    digest = _allow(ready, plugins)
+    (ready.config_dir / "verified.json").write_text(
+        json.dumps({"manifest_sha256": [digest]}), encoding="utf-8"
+    )
+    capsys.readouterr()
+    assert _run(plugins, "--json") == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["trust"] == "community"
+    assert "older than 24 h" not in captured.err
 
 
 def test_sync_verified_needs_login_and_keeps_cache(
@@ -687,7 +754,8 @@ def test_sync_verified_needs_login_and_keeps_cache(
     assert _list(plugins, "--sync-verified") == 1
     assert "run `audidash login`" in capsys.readouterr().err
     cache = json.loads((ready.config_dir / "verified.json").read_text())
-    assert cache == {"manifest_sha256": [digest]}
+    assert cache["manifest_sha256"] == [digest]
+    assert "fetched_at" in cache
 
 
 def test_corrupt_cache_is_ignored(

@@ -30,14 +30,16 @@ def token_sha256(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_enrollment_token(db: DbSession, created_by: uuid.UUID) -> str:
-    """Add a single-use, 24 h token row (caller commits); return the only plaintext copy."""
+def create_enrollment_token(
+    db: DbSession, created_by: uuid.UUID, ttl: timedelta = ENROLLMENT_TOKEN_TTL
+) -> str:
+    """Add a single-use token row, 24 h by default (caller commits); return the only copy."""
     token = secrets.token_urlsafe(32)
     db.add(
         EnrollmentToken(
             token_sha256=token_sha256(token),
             created_by=created_by,
-            expires_at=clock.now() + ENROLLMENT_TOKEN_TTL,
+            expires_at=clock.now() + ttl,
         )
     )
     return token
