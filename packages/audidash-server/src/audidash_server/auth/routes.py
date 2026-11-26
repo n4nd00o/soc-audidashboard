@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Annotated, Any
 
@@ -135,6 +136,14 @@ def _claim_totp_step(db: DbSession, user: User, step: int) -> bool:
     return claimed == 1
 
 
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _audit_username(username: str) -> str:
+    """Bounded, control-character-free copy of a submitted username for the audit log."""
+    return _CONTROL_CHARS.sub("?", username[:64])
+
+
 @router.post("/login")
 def login_submit(
     request: Request,
@@ -156,19 +165,28 @@ def login_submit(
             request, error=GENERIC_LOGIN_ERROR, username=username[:64], status_code=401
         )
 
-    def fail_counted(user_id: uuid.UUID | None) -> Response:
-        """Every failure path does the same DB work: one counted UPDATE and a commit."""
-        if record_failure(db, user_id, now):
-            logger.warning("account %s locked after %d failures", user_id, MAX_FAILED_LOGINS)
-        # Same transaction as the counter UPDATE; never says which factor failed.
+    def audit_failure() -> None:
         audit.record(
             db,
             action="login.failure",
             actor_user_id=None,
             actor_device_id=None,
             target="login",
-            details={"username": username[:64], "reason": "invalid"},
+            details={"username": _audit_username(username), "reason": "invalid"},
         )
+
+    def fail_rolled_back() -> Response:
+        """Race losers: their transaction was rolled back; still leave an audit row."""
+        audit_failure()
+        db.commit()
+        return fail()
+
+    def fail_counted(user_id: uuid.UUID | None) -> Response:
+        """Every failure path does the same DB work: one counted UPDATE and a commit."""
+        if record_failure(db, user_id, now):
+            logger.warning("account %s locked after %d failures", user_id, MAX_FAILED_LOGINS)
+        # Same transaction as the counter UPDATE; never says which factor failed.
+        audit_failure()
         db.commit()
         return fail()
 
@@ -190,12 +208,12 @@ def login_submit(
 
     if not clear_failures_if_unlocked(db, user.id, now):
         db.rollback()  # a concurrent attempt locked the account meanwhile
-        return fail()
+        return fail_rolled_back()
     if passwords.needs_rehash(user.password_hash):
         user.password_hash = passwords.hash_password(password)
     if step is not None and not _claim_totp_step(db, user, step):
         db.rollback()  # a concurrent login consumed this code first
-        return fail()
+        return fail_rolled_back()
     delete_session_by_token(db, request.cookies.get(SESSION_COOKIE))  # rotate
     token, _ = create_session(db, user, ip, pending=not enrolled)
     audit.record(
