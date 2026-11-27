@@ -5,6 +5,7 @@
   <div class="page-head"><h1>Plugins</h1></div>
   <p class="hint">Plugins vistos nas execuções enviadas, agrupados por manifesto. A confiança exibida é a declarada pelo cliente; somente os manifestos da lista de verificados são distribuídos aos dispositivos.</p>
   {% if groups %}
+  <div class="table-wrap">
   <table class="data plugins">
     <thead>
       <tr>
@@ -38,6 +39,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="hint">Nenhum plugin apareceu em execuções ainda.</p>
   {% endif %}
@@ -45,6 +47,7 @@
 <section class="card">
   <div class="page-head"><h2>Lista de verificados</h2></div>
   {% if allowlist %}
+  <div class="table-wrap">
   <table class="data allowlist">
     <thead>
       <tr>
@@ -73,6 +76,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="hint">Nenhum manifesto verificado.</p>
   {% endif %}

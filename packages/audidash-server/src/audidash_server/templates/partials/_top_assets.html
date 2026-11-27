@@ -1,4 +1,5 @@
 {% if ov.top_assets %}
+<div class="table-wrap">
 <table class="data">
   <thead><tr><th scope="col">Ativo</th><th scope="col">Pontuação</th><th scope="col">Nível</th><th scope="col">Achados</th></tr></thead>
   <tbody>
@@ -12,6 +13,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="hint">Nenhum ativo cadastrado.</p>
 {% endif %}

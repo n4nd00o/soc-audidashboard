@@ -29,6 +29,7 @@
   </form>
   <p class="hint" role="status">{{ page.total }} execução(ões) · página {{ page.page }} de {{ page.pages }}</p>
   {% if page.rows %}
+  <div class="table-wrap">
   <table class="data runs">
     <thead>
       <tr>
@@ -56,6 +57,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="hint">Nenhuma execução encontrada para estes filtros.</p>
   {% endif %}

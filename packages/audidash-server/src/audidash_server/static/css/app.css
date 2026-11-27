@@ -115,7 +115,7 @@ a { color: var(--accent); }
   font-weight: 700;
 }
 .content { max-width: 72rem; margin: 1.5rem auto; padding: 0 1rem; width: 100%; }
-.shell.with-nav .content { margin: 1.5rem 0; padding: 0 1.5rem; max-width: none; }
+.shell.with-nav .content { margin: 1.5rem 0; padding: 0 1.5rem; max-width: none; min-width: 0; }
 
 .card {
   background: var(--surface);
@@ -222,6 +222,8 @@ button.ghost:hover { background: var(--surface-2); }
 .trend-line { stroke: var(--accent); }
 
 /* Tables */
+/* Narrow screens: a wide table scrolls inside its own box, never the whole page. */
+.table-wrap { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
 table.data { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 table.data th, table.data td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
 table.data th { color: var(--muted); font-weight: 600; }

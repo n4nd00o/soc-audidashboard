@@ -14,6 +14,7 @@
   {% endif %}
   <h3>Histórico</h3>
   {% if history %}
+  <div class="table-wrap">
   <table class="data history">
     <thead><tr><th scope="col">Quando</th><th scope="col">De</th><th scope="col">Para</th><th scope="col">Por</th><th scope="col">Justificativa</th></tr></thead>
     <tbody>
@@ -28,5 +29,6 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}<p class="hint">Sem eventos.</p>{% endif %}
 </section>
