@@ -18,6 +18,12 @@ MIN_SECRET_LENGTH = 32
 # Excludes shell metacharacters such as $ ` ; ' " ( ) & | < > \ and whitespace.
 _URL_SAFE = re.compile(r"[A-Za-z0-9\-._~:/\[\]@%+=,]*")
 _SECRET_FIELDS = ("secret_key", "proxy_secret", "ca_passphrase")
+# Static field -> env var names: log lines reference only these constants, never secret values.
+_ENV_NAMES = {
+    "secret_key": "AUDIDASH_SECRET_KEY",  # nosec B105 - env var name, not a secret
+    "proxy_secret": "AUDIDASH_PROXY_SECRET",  # nosec B105 - env var name, not a secret
+    "ca_passphrase": "AUDIDASH_CA_PASSPHRASE",  # nosec B105 - env var name, not a secret
+}
 
 
 class Settings(BaseSettings):
@@ -67,8 +73,8 @@ class Settings(BaseSettings):
             if not getattr(self, name).get_secret_value():
                 setattr(self, name, SecretStr(secrets.token_urlsafe(48)))
                 logger.warning(
-                    "AUDIDASH_%s not set: using a random per-process value (dev mode)",
-                    name.upper(),
+                    "%s not set: using a random per-process value (dev mode)",
+                    _ENV_NAMES[name],
                 )
         return self
 
@@ -81,7 +87,7 @@ class Settings(BaseSettings):
             problems.append("AUDIDASH_DATABASE_URL is missing")
         for name in _SECRET_FIELDS:
             value = getattr(self, name).get_secret_value()
-            env = f"AUDIDASH_{name.upper()}"
+            env = _ENV_NAMES[name]
             if not value:
                 problems.append(f"{env} is missing")
             elif len(value) < MIN_SECRET_LENGTH:

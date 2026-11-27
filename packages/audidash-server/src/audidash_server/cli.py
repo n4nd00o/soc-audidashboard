@@ -85,6 +85,21 @@ def _open_secret_file(path: Path) -> int:
     return os.open(path, flags, 0o600)
 
 
+def _show_totp_enrolment(uri: str) -> None:
+    """Interactive enrolment only: show the provisioning URI (and QR) on the terminal.
+
+    This is the one intentional place the TOTP secret is displayed; the admin has to load it
+    into an authenticator app. Nothing else in create_admin may print or log it.
+    """
+    print("Cadastre o segundo fator (TOTP) no aplicativo autenticador:")
+    print(uri)
+    try:
+        segno.make(uri, error="m").terminal(out=sys.stdout, compact=True)
+    except (UnicodeEncodeError, OSError):  # e.g. a legacy code page on a redirected stdout
+        print("(QR code indisponível neste terminal: use a URI acima.)")
+    print("Guarde a chave com segurança: ela não será exibida novamente.")
+
+
 def create_admin(
     username: str, *, password_stdin: bool = False, totp_secret_out: Path | None = None
 ) -> int:
@@ -153,14 +168,7 @@ def create_admin(
     if totp_secret_out is not None:
         print(f"Chave TOTP gravada em {totp_secret_out} (não exibida).")
         return 0
-    uri = provisioning_uri(secret, username)
-    print("Cadastre o segundo fator (TOTP) no aplicativo autenticador:")
-    print(uri)
-    try:
-        segno.make(uri, error="m").terminal(out=sys.stdout, compact=True)
-    except (UnicodeEncodeError, OSError):  # e.g. a legacy code page on a redirected stdout
-        print("(QR code indisponível neste terminal: use a URI acima.)")
-    print("Guarde a chave com segurança: ela não será exibida novamente.")
+    _show_totp_enrolment(provisioning_uri(secret, username))
     return 0
 
 

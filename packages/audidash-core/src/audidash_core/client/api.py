@@ -138,6 +138,9 @@ def fetch_ca_pem(dashboard_url: str, *, transport: httpx.BaseTransport | None = 
     fingerprint (or have the user confirm it) before trusting it.
     """
     url = dashboard_url.rstrip("/") + "/ca.pem"
+    # INTENTIONAL verify=False: trust is not established yet (this fetch bootstraps it). Only a
+    # public certificate is downloaded, no secret is sent, and the caller checks its SHA-256
+    # fingerprint before anything is trusted or any token is transmitted.
     with httpx.Client(
         transport=transport,
         verify=False,  # noqa: S501  # nosec B501 - public, non-secret, checked by fingerprint
@@ -182,6 +185,9 @@ def enroll_device(
     (unverified TLS); the caller then checks the returned CA before trusting anything.
     """
     body = {"token": token, "device_name": device_name, "csr_pem": csr_pem}
+    # INTENTIONAL: verification is disabled ONLY for the explicit --insecure-first-contact
+    # opt-in (ca_pem is None), after the user was warned and confirmed the CA fingerprint.
+    # Otherwise the connection is verified against the fingerprint-checked CA alone.
     verify: ssl.SSLContext | bool = enroll_ssl_context(ca_pem) if ca_pem is not None else False
     with httpx.Client(
         transport=transport,

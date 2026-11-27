@@ -11,4 +11,6 @@ paths = [
 ]
 regexes = [
   '''AKIAIOSFODNN7EXAMPLE''',
+  # Shared fake password used across server and client test suites.
+  '''Corr3ct-Horse-Battery-Staple''',
 ]
