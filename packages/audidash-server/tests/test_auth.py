@@ -704,3 +704,34 @@ def test_create_admin_empty_stdin_is_clean(
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert cli.main(["create-admin", "--username", "root", "--password-stdin"]) == 2
     assert capsys.readouterr().err.count("\n") == 1
+
+
+def test_set_cookie_accepts_urlsafe_and_signed_values() -> None:
+    from audidash_server.auth.sessions import clear_cookie, set_cookie
+    from starlette.responses import Response
+
+    response = Response()
+    set_cookie(response, SESSION_COOKIE, "abc-DEF_123")
+    set_cookie(response, "__Host-audidash_login_csrf", "nonce_-x.0a1b2c")
+    clear_cookie(response, SESSION_COOKIE)
+    assert response.headers.getlist("set-cookie")[0].startswith(f"{SESSION_COOKIE}=abc-DEF_123;")
+
+
+@pytest.mark.parametrize("value", ["a\r\nSet-Cookie: x=1", "a;Path=/x", "a b", "a,b", "ok\n"])
+def test_set_cookie_rejects_injection_in_value(value: str) -> None:
+    from audidash_server.auth.sessions import set_cookie
+    from starlette.responses import Response
+
+    with pytest.raises(ValueError):
+        set_cookie(Response(), SESSION_COOKIE, value)
+
+
+@pytest.mark.parametrize("name", ["a=b", "a;b", "a\r\nb", ""])
+def test_cookie_name_is_validated(name: str) -> None:
+    from audidash_server.auth.sessions import clear_cookie, set_cookie
+    from starlette.responses import Response
+
+    with pytest.raises(ValueError):
+        set_cookie(Response(), name, "v")
+    with pytest.raises(ValueError):
+        clear_cookie(Response(), name)

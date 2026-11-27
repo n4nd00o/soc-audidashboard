@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import timedelta
 from typing import Annotated
@@ -20,6 +21,9 @@ from audidash_server.settings import Settings
 
 SESSION_COOKIE = "__Host-audidash_session"
 COOKIE_ATTRS = "HttpOnly; Secure; SameSite=Strict; Path=/"
+_COOKIE_NAME_RE = re.compile(r"(__Host-)?[A-Za-z0-9_-]+")
+# urlsafe tokens and signed values ("nonce.hexsig"); never CR/LF, ";", spaces or commas.
+_COOKIE_VALUE_RE = re.compile(r"[A-Za-z0-9_\-.=]*")
 PENDING_MAX_AGE = timedelta(minutes=10)  # time allowed to finish first-login TOTP enrolment
 
 
@@ -31,12 +35,22 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _check_cookie(name: str, value: str) -> None:
+    """Reject anything that could inject extra attributes or headers into Set-Cookie."""
+    if not _COOKIE_NAME_RE.fullmatch(name):
+        raise ValueError("invalid cookie name")
+    if not _COOKIE_VALUE_RE.fullmatch(value):
+        raise ValueError("invalid cookie value")
+
+
 def set_cookie(response: Response, name: str, value: str) -> None:
     """Session-lifetime cookie with the exact attributes required by the spec."""
+    _check_cookie(name, value)
     response.headers.append("set-cookie", f"{name}={value}; {COOKIE_ATTRS}")
 
 
 def clear_cookie(response: Response, name: str) -> None:
+    _check_cookie(name, "")
     response.headers.append("set-cookie", f"{name}=; Max-Age=0; {COOKIE_ATTRS}")
 
 

@@ -667,6 +667,7 @@ def tls_server(tmp_path: Path) -> Iterator[TlsFixture]:
     key_file.write_bytes(_key_pem(server_key))
     ca_file.write_bytes(_pem(pinned_cert))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(cert_file, key_file)
     context.load_verify_locations(ca_file)
     context.verify_mode = ssl.CERT_REQUIRED  # mTLS: the client must present a device cert
@@ -742,6 +743,7 @@ def enroll_tls(tmp_path: Path) -> Iterator[EnrollTls]:
     cert_file.write_bytes(_pem(server_cert))
     key_file.write_bytes(_key_pem(server_key))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(cert_file, key_file)
     handler: type[_EnrollHandler] = type(
         "Handler", (_EnrollHandler,), {"ca_pem": _pem(ca_cert), "posted": []}

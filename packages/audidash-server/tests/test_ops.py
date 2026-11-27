@@ -186,9 +186,12 @@ def test_purge_respects_retention_days(
 
 
 def test_purge_reports_db_errors_cleanly(
-    ops_env: Settings, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ops_env: Settings, monkeypatch: pytest.MonkeyPatch, capsys: Any, tmp_path: Path
 ) -> None:
-    # No tables were created: the query fails.
+    # Point at an empty SQLite file (no tables) regardless of the test backend,
+    # so the purge query fails even when the suite runs against PostgreSQL.
+    empty_db = (tmp_path / "empty.db").as_posix()
+    monkeypatch.setenv("AUDIDASH_DATABASE_URL", f"sqlite:///{empty_db}")
     assert cli.main(["purge"]) == 2
     err = capsys.readouterr().err
     assert err.startswith("erro: banco de dados inacessível")
@@ -513,6 +516,7 @@ def test_tls_handshake_against_issued_cert(tmp_path: Path) -> None:
 
     def handshake(server_name: str) -> None:
         ctx = ssl.create_default_context(cafile=str(tmp_path / "ca.pem"))
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         assert ctx.check_hostname
         with (
             socket.create_connection(("127.0.0.1", port), timeout=10) as raw,

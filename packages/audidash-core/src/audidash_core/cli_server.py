@@ -70,6 +70,15 @@ def _prompt(read: Callable[[], str]) -> str:
         raise ServerCliError("input cancelled or closed; nothing was changed") from None
 
 
+def _read_secret(label: str) -> str:
+    """Hidden prompt for a secret. Deliberately separate from `_prompt`/`_say`: the value is
+    returned to the caller only and never passes through any code path that prints."""
+    try:
+        return getpass.getpass(f"{label}: ")
+    except (EOFError, KeyboardInterrupt):
+        raise ServerCliError("input cancelled or closed; nothing was changed") from None
+
+
 def _directory() -> Path:
     return client_config.default_config_dir()
 
@@ -146,7 +155,7 @@ def cmd_enroll(args: argparse.Namespace) -> int:
 
     # 2. Only now ask for / send the token: over TLS verified against that CA when it was
     #    checked against --ca-fingerprint; unverified (explicit opt-in) otherwise.
-    token = args.token or _prompt(lambda: getpass.getpass("Enrolment token: ")).strip()
+    token = (args.token or _read_secret("Enrolment token")).strip()
     if not token:
         raise ServerCliError("an enrolment token is required", usage=True)
     key = identity.generate_key()
@@ -204,10 +213,7 @@ def cmd_login(args: argparse.Namespace) -> int:
     username = (args.username or _prompt(lambda: input("Username: "))).strip()
     if not username:
         raise ServerCliError("username is required", usage=True)
-    if args.password_stdin:
-        password = _stdin_line("password")
-    else:
-        password = _prompt(lambda: getpass.getpass("Password: "))
+    password = _stdin_line("password") if args.password_stdin else _read_secret("Password")
     totp = (args.totp_code or _prompt(lambda: input("TOTP code: "))).strip()
     try:
         with ApiClient(config, make_transport(directory)) as client:
