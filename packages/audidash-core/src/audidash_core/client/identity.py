@@ -48,6 +48,35 @@ def cert_fingerprint(cert_pem: str | bytes) -> str:
     return hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
 
 
+_SINGLE_CERT_PEM = re.compile(
+    rb"\A\s*-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----\s*\Z"
+)
+
+
+def parse_single_ca_pem(data: bytes) -> x509.Certificate:
+    """The one CA certificate in ``data``; ValueError for anything else.
+
+    Exactly one PEM CERTIFICATE block with only whitespace around it, and a CA (basic
+    constraints ``ca=True``). A bundle would let an appended certificate ride along a
+    fingerprint check that only looks at the first block, so callers must trust and store
+    the re-serialized certificate, never the raw bytes.
+    """
+    if not _SINGLE_CERT_PEM.fullmatch(data) or data.count(b"-----BEGIN") != 1:
+        raise ValueError("expected exactly one PEM CA certificate and nothing else")
+    try:
+        cert = x509.load_pem_x509_certificate(data)
+        is_ca = cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    except (ValueError, x509.ExtensionNotFound):
+        raise ValueError("expected exactly one PEM CA certificate and nothing else") from None
+    if not is_ca:
+        raise ValueError("expected exactly one PEM CA certificate and nothing else")
+    return cert
+
+
+def canonical_pem(cert: x509.Certificate) -> str:
+    return cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
 def normalize_fingerprint(raw: str) -> str | None:
     """Lowercase hex without ':'/whitespace; None unless exactly 64 hex characters."""
     value = _SEPARATORS.sub("", raw).lower()

@@ -65,6 +65,7 @@ class ProxyTransport(httpx.BaseTransport):
         self.fail_runs: tuple[int, str] | None = None
         self.requests: list[tuple[str, str]] = []
         self.ca_pem_override: bytes | None = None
+        self.enroll_ca_suffix: str | None = None
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append((request.method, request.url.path))
@@ -81,11 +82,16 @@ class ProxyTransport(httpx.BaseTransport):
         r = self.app_client.request(
             request.method, str(request.url), content=request.content, headers=headers
         )
+        content = r.content
+        if self.enroll_ca_suffix is not None and request.url.path == "/enroll":
+            body = r.json()
+            body["ca_pem"] += self.enroll_ca_suffix
+            content = json.dumps(body).encode()
         skip = {"content-encoding", "content-length", "transfer-encoding"}
         return httpx.Response(
             r.status_code,
             headers=[(k, v) for k, v in r.headers.items() if k.lower() not in skip],
-            content=r.content,
+            content=content,
             request=request,
         )
 
@@ -255,6 +261,45 @@ def test_enroll_refuses_enroll_response_with_another_ca(
     assert main(env.enroll_args("--ca-fingerprint", fp)) == 1
     assert "different CA" in capsys.readouterr().err
     assert _files(env.config_dir) == []
+
+
+def _real_ca_pem(env: Env) -> bytes:
+    return load_or_create_ca(env.settings.data_dir, env.settings.ca_passphrase).cert_pem
+
+
+def test_enroll_refuses_a_ca_bundle_before_sending_the_token(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # genuine CA first (passes a first-block fingerprint check) + attacker CA appended
+    _key, evil = _make_ca("attacker CA")
+    env.transport.ca_pem_override = _real_ca_pem(env) + _pem(evil)
+    assert main(env.enroll_args("--ca-fingerprint", env.ca_fingerprint())) == 1
+    assert "exactly one" in capsys.readouterr().err
+    assert ("POST", "/enroll") not in env.transport.requests
+    assert _files(env.config_dir) == []
+
+
+def test_enroll_refuses_ca_with_trailing_garbage(env: Env) -> None:
+    env.transport.ca_pem_override = _real_ca_pem(env) + b"junk"
+    assert main(env.enroll_args("--ca-fingerprint", env.ca_fingerprint())) == 1
+    assert ("POST", "/enroll") not in env.transport.requests
+
+
+def test_enroll_refuses_enroll_response_with_appended_ca(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _key, evil = _make_ca("attacker CA")
+    env.transport.enroll_ca_suffix = _pem(evil).decode()
+    assert main(env.enroll_args("--ca-fingerprint", env.ca_fingerprint())) == 1
+    assert "exactly one" in capsys.readouterr().err
+    assert _files(env.config_dir) == []
+
+
+def test_enroll_saves_a_single_reserialized_ca(env: Env) -> None:
+    env.enroll()
+    saved = (env.config_dir / "ca.crt").read_bytes()
+    assert saved.count(b"BEGIN CERTIFICATE") == 1
+    assert identity.cert_fingerprint(saved) == env.ca_fingerprint()
 
 
 def test_enroll_accepts_colon_separated_uppercase_fingerprint(env: Env) -> None:
@@ -752,6 +797,55 @@ def test_enroll_ssl_context_trusts_only_the_given_ca(enroll_tls: EnrollTls) -> N
 
 
 # ------------------------------------------------------------------ identity helpers
+
+
+def test_fetch_ca_pem_aborts_an_oversized_streamed_body() -> None:
+    sent: list[int] = []
+
+    def chunks() -> Iterator[bytes]:
+        for i in range(1000):  # 1000 x 1 KiB, far over the 16 KiB cap
+            sent.append(i)
+            yield b"A" * 1024
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_Chunks(chunks()))
+
+    with pytest.raises(ApiError, match="too large"):
+        api.fetch_ca_pem("https://dash.example", transport=httpx.MockTransport(handler))
+    assert len(sent) < 100  # stopped reading early
+
+
+class _Chunks(httpx.SyncByteStream):
+    def __init__(self, it: Iterator[bytes]) -> None:
+        self._it = it
+
+    def __iter__(self) -> Iterator[bytes]:
+        return self._it
+
+
+def test_parse_single_ca_pem_rules() -> None:
+    ca_key, ca = _make_ca("CA")
+    _leaf_key, leaf = _issue(ca_key, ca, "localhost", server=True)
+    good = _pem(ca)
+    assert identity.parse_single_ca_pem(b"\n  " + good + b"\n\n") == ca
+    bad = [
+        good + _pem(ca),  # two blocks
+        good + b"trailing",
+        b"leading" + good,
+        _pem(leaf),  # not a CA
+        b"",
+        good.replace(b"CERTIFICATE", b"PRIVATE KEY"),
+    ]
+    for data in bad:
+        with pytest.raises(ValueError, match="CA certificate"):
+            identity.parse_single_ca_pem(data)
+
+
+def test_enroll_ssl_context_refuses_a_bundle() -> None:
+    _k1, one = _make_ca("one")
+    _k2, two = _make_ca("two")
+    with pytest.raises(ApiError, match="exactly one"):
+        api.enroll_ssl_context((_pem(one) + _pem(two)).decode())
 
 
 def test_csr_has_no_extensions_and_sanitized_subject() -> None:
