@@ -338,22 +338,27 @@ def test_redis_open_has_protected_mode_off(services: dict[str, dict[str, Any]]) 
 def test_docker_compose_config_is_valid() -> None:
     docker = shutil.which("docker")
     assert docker is not None
-    result = subprocess.run(  # noqa: S603 - fixed argument list, no shell
-        [
-            docker,
-            "compose",
-            "--env-file",
-            str(ENV_EXAMPLE),
-            "-f",
-            str(COMPOSE),
-            "config",
-            "--quiet",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argument list, no shell
+            [
+                docker,
+                "compose",
+                "--env-file",
+                str(ENV_EXAMPLE),
+                "-f",
+                str(COMPOSE),
+                "config",
+                "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        # Seen on GitHub's Windows runners: the docker CLI itself hangs. That says
+        # nothing about the compose file, which the Linux jobs and compose-smoke check.
+        pytest.skip("docker CLI did not respond within 60 s in this environment")
     if result.returncode != 0 and "unknown" in result.stderr and "compose" in result.stderr:
         pytest.skip("docker compose plugin not available")
     assert result.returncode == 0, result.stderr
