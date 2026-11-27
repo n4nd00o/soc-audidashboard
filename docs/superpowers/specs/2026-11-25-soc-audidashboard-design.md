@@ -226,3 +226,15 @@ Chamadas do Claude (revisáveis):
 - **Banco:** SQLAlchemy 2 + Alembic. Testes unitários em SQLite; CI roda também a suíte contra PostgreSQL real (serviço do GitHub Actions).
 - **Credenciais da CLI:** a chave privada do dispositivo e o token de acesso ficam no diretório de configuração do usuário, com permissões restritas; o token expira em 15 minutos.
 - **Plano 2 abre com o reforço dos dados que saem do cliente:** pendências registradas no ledger do Plano 1.
+
+## 15. Adendo do Plano 3 — app desktop (2026-11-27)
+
+Decisões do usuário:
+- **Distribuição:** executáveis prontos (PyInstaller) para Windows, Linux e macOS, gerados no CI e anexados à release do GitHub; sem assinatura de código (o README explica o aviso do sistema).
+- **Visual:** igual ao dashboard web — tema escuro por padrão com opção clara, mesmas cores de severidade/nível e navegação lateral.
+- **Plugins no app empacotado:** os plugins Python rodam com um **Python 3.12+ do sistema** (detectado no PATH ou caminho configurado), mantendo o isolamento `-I -S` atual; sem Python, o app abre normalmente e só a execução de plugins Python mostra uma mensagem clara.
+
+Chamadas do Claude (revisáveis):
+- Uma **fachada de serviço sem saída em terminal** (`audidash_core.client.service`) concentra cadastro, login, ativos, sincronização da allowlist e envio; a CLI e o app desktop usam a mesma fachada (comportamento de segurança idêntico).
+- Execuções rodam fora da thread da interface (`QThread`), com cancelamento que encerra a árvore de processos do plugin.
+- Senhas, códigos TOTP e tokens de cadastro só existem em campos de senha e na memória pelo tempo da chamada; nunca vão para logs, configurações ou histórico.
