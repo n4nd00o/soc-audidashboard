@@ -73,12 +73,22 @@ def _valid_login_token(settings: Settings, token: str | None) -> str | None:
 
 def login_csrf_token(request: Request) -> str:
     """Valid token from the login-CSRF cookie, or a freshly signed one."""
+    return issue_login_csrf(request)[0]
+
+
+def issue_login_csrf(request: Request) -> tuple[str, str | None]:
+    """Return (token for the form, freshly minted token to set as cookie or None).
+
+    A still-valid cookie is reused for the form but never echoed back in Set-Cookie:
+    the server only ever emits cookie values it generated itself.
+    """
     settings: Settings = request.app.state.settings
     existing = _valid_login_token(settings, request.cookies.get(LOGIN_CSRF_COOKIE))
     if existing:
-        return existing
+        return existing, None
     nonce = secrets.token_urlsafe(32)
-    return f"{nonce}.{_sign(settings, nonce)}"
+    fresh = f"{nonce}.{_sign(settings, nonce)}"
+    return fresh, fresh
 
 
 def set_login_csrf_cookie(response: Response, token: str) -> None:
