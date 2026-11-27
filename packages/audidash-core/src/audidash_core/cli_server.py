@@ -159,20 +159,24 @@ def cmd_enroll(args: argparse.Namespace) -> int:
             ca_pem=ca_pem if expected is not None else None,
             transport=make_transport(directory),
         )
-        returned = identity.cert_fingerprint(result.ca_pem)
+        # Exactly one CA, re-serialized: an appended certificate must never be pinned.
+        returned_pem = identity.canonical_pem(
+            identity.parse_single_ca_pem(result.ca_pem.encode("ascii"))
+        )
+        returned = identity.cert_fingerprint(returned_pem)
     except (ClientError, ValueError) as exc:
-        raise ServerCliError(str(exc)) from None
+        raise ServerCliError(f"enrolment aborted, nothing saved: {exc}") from None
     if not hmac.compare_digest(returned, actual):
         raise ServerCliError("the server returned a different CA than /ca.pem — nothing saved")
     try:
-        identity.check_issued_certificate(result.cert_pem, result.ca_pem, key)
+        identity.check_issued_certificate(result.cert_pem, returned_pem, key)
     except ValueError as exc:
         raise ServerCliError(str(exc)) from None
     client_config.save_enrollment(
         directory,
         key_pem=identity.key_to_pem(key),
         cert_pem=result.cert_pem.encode("ascii"),
-        ca_pem=result.ca_pem.encode("ascii"),
+        ca_pem=returned_pem.encode("ascii"),
         dashboard_url=dashboard,
         api_url=api,
         device_id=result.device_id,

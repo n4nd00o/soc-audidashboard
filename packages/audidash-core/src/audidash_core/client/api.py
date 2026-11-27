@@ -13,9 +13,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from cryptography import x509
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from audidash_core.client import identity
 from audidash_core.client.config import ClientConfig, ClientError, SessionExpiredError
 from audidash_core.manifest import TargetType
 from audidash_core.scoring import Criticality
@@ -114,9 +114,14 @@ MAX_CA_PEM_BYTES = 16 * 1024
 
 
 def enroll_ssl_context(ca_pem: str) -> ssl.SSLContext:
-    """Trust only ``ca_pem`` (no system roots), with hostname checking, for ``/enroll``."""
+    """Trust only the single CA in ``ca_pem`` (no system roots), with hostname checking.
+
+    The context is built from the re-serialized certificate, never from the raw text, so an
+    extra certificate smuggled into ``ca_pem`` can never become a trust anchor.
+    """
     try:
-        context = ssl.create_default_context(cadata=ca_pem)
+        cert = identity.parse_single_ca_pem(ca_pem.encode("ascii"))
+        context = ssl.create_default_context(cadata=identity.canonical_pem(cert))
     except (ssl.SSLError, ValueError) as exc:
         raise ApiError(f"unusable CA certificate: {exc}") from None
     context.check_hostname = True
@@ -127,9 +132,12 @@ def enroll_ssl_context(ca_pem: str) -> ssl.SSLContext:
 def fetch_ca_pem(dashboard_url: str, *, transport: httpx.BaseTransport | None = None) -> str:
     """GET /ca.pem WITHOUT TLS verification: the CA certificate is public and not secret.
 
-    Nothing secret is sent. The caller MUST compare the certificate's SHA-256 with an
-    out-of-band fingerprint (or have the user confirm it) before trusting it.
+    Nothing secret is sent. The body is read as a stream and abandoned past
+    ``MAX_CA_PEM_BYTES``; it must hold exactly one CA certificate, which is returned
+    re-serialized (canonical PEM). The caller MUST compare its SHA-256 with an out-of-band
+    fingerprint (or have the user confirm it) before trusting it.
     """
+    url = dashboard_url.rstrip("/") + "/ca.pem"
     with httpx.Client(
         transport=transport,
         verify=False,  # noqa: S501  # nosec B501 - public, non-secret, checked by fingerprint
@@ -137,17 +145,24 @@ def fetch_ca_pem(dashboard_url: str, *, transport: httpx.BaseTransport | None = 
         trust_env=False,
         follow_redirects=False,
     ) as client:
-        response = _call(client, "GET", dashboard_url.rstrip("/") + "/ca.pem")
-    if response.status_code != 200:
-        raise ApiError(f"cannot download the CA certificate: HTTP {response.status_code}")
-    if len(response.content) > MAX_CA_PEM_BYTES:
-        raise ApiError("cannot download the CA certificate: response too large")
+        try:
+            with client.stream("GET", url) as response:
+                if response.status_code != 200:
+                    raise ApiError(
+                        f"cannot download the CA certificate: HTTP {response.status_code}"
+                    )
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body += chunk
+                    if len(body) > MAX_CA_PEM_BYTES:
+                        raise ApiError("cannot download the CA certificate: response too large")
+        except httpx.HTTPError as exc:
+            raise _connection_error(exc, url) from None
     try:
-        ca_pem = response.content.decode("ascii")
-        x509.load_pem_x509_certificate(response.content)
-    except ValueError:
-        raise ApiError("the server did not return a valid CA certificate") from None
-    return ca_pem
+        cert = identity.parse_single_ca_pem(bytes(body))
+    except ValueError as exc:
+        raise ApiError(f"the server did not return a valid CA certificate: {exc}") from None
+    return identity.canonical_pem(cert)
 
 
 def enroll_device(
