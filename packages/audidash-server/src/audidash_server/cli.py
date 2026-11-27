@@ -101,7 +101,7 @@ def _show_totp_enrolment(uri: str) -> None:
 
 
 def create_admin(
-    username: str, *, password_stdin: bool = False, totp_secret_out: Path | None = None
+    username: str, *, password_stdin: bool = False, totp_key_file: Path | None = None
 ) -> int:
     if not USERNAME_RE.match(username):
         return _err("nome de usuário inválido (3-64 caracteres: letras, números, _ . -).")
@@ -115,11 +115,11 @@ def create_admin(
         return password
 
     secret_fd: int | None = None
-    if totp_secret_out is not None:
+    if totp_key_file is not None:
         try:
-            secret_fd = _open_secret_file(totp_secret_out)
+            secret_fd = _open_secret_file(totp_key_file)
         except OSError as exc:
-            return _err(f"não foi possível criar {totp_secret_out}: {exc.strerror or exc}")
+            return _err(f"não foi possível criar {totp_key_file}: {exc.strerror or exc}")
     created = False
     try:
         secret = totp_secret_new()
@@ -161,12 +161,12 @@ def create_admin(
     finally:
         if secret_fd is not None:
             os.close(secret_fd)
-        if totp_secret_out is not None and not created:
-            totp_secret_out.unlink(missing_ok=True)
+        if totp_key_file is not None and not created:
+            totp_key_file.unlink(missing_ok=True)
 
     print(f"Administrador '{username}' criado.")
-    if totp_secret_out is not None:
-        print(f"Chave TOTP gravada em {totp_secret_out} (não exibida).")
+    if totp_key_file is not None:
+        print(f"Chave TOTP gravada em {totp_key_file} (não exibida).")
         return 0
     _show_totp_enrolment(provisioning_uri(secret, username))
     return 0
@@ -403,6 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     admin.add_argument(
         "--totp-secret-out",
+        dest="totp_key_file",
         type=Path,
         metavar="FILE",
         help="for automation: write the TOTP secret to FILE (new, mode 0600, never overwritten) "
@@ -442,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
         return create_admin(
             args.username,
             password_stdin=args.password_stdin,
-            totp_secret_out=args.totp_secret_out,
+            totp_key_file=args.totp_key_file,
         )
     if args.command == "audit" and args.audit_command == "verify":
         return audit_verify()
