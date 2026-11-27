@@ -9,6 +9,7 @@
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <div id="asset-form-slot"></div>
   {% if rows %}
+  <div class="table-wrap">
   <table class="data assets">
     <thead>
       <tr>
@@ -22,6 +23,7 @@
       {% for row in rows %}{% include "assets/_row.html" %}{% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="hint">Nenhum ativo cadastrado.</p>
   {% endif %}

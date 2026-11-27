@@ -1,6 +1,7 @@
 <div id="findings-results">
   <p class="hint" role="status">{{ page.total }} achado(s) · página {{ page.page }} de {{ page.pages }}</p>
   {% if page.rows %}
+  <div class="table-wrap">
   <table class="data findings">
     <thead>
       <tr>
@@ -23,6 +24,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="hint">Nenhum achado encontrado para estes filtros.</p>
   {% endif %}

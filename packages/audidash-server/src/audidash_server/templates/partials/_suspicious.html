@@ -1,4 +1,5 @@
 {% if ov.suspicious %}
+<div class="table-wrap">
 <table class="data">
   <thead><tr><th scope="col">Achado</th><th scope="col">Ativo</th><th scope="col">Severidade</th><th scope="col">Visto pela 1ª vez</th></tr></thead>
   <tbody>
@@ -12,6 +13,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="hint">Nenhuma atividade suspeita em aberto.</p>
 {% endif %}
