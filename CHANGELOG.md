@@ -6,6 +6,28 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- Enrolment no longer sends the one-time token over unverified TLS when `--ca-fingerprint` is
+  given: `:8443` now serves a certificate from the internal CA (`AUDIDASH_DASHBOARD_HOSTS`,
+  issued/re-validated by the entrypoint; Caddy `default_sni localhost`), the server publishes
+  `GET /ca.pem`, and the CLI checks its SHA-256 before sending the token over TLS verified
+  against that CA. `--insecure-first-contact` shows the fingerprint and asks `y/N` first.
+- NUL characters can no longer reach PostgreSQL: the client strips them from findings, warnings
+  and stderr; the server rejects them in ingestion (422 naming the field), treats NUL usernames
+  as a normal failed login, ignores NUL filter values and never echoes them in forms.
+
+### Changed
+- Retention ages runs by the server's `received_at` instead of the client's `finished_at`.
+- Ingestion rejects `started_at`/`finished_at` before 2000-01-01 or > 24 h in the future (422).
+- Enrolment commands derived from the request always use `https://`.
+- DB-touching dashboard routes run in the threadpool (plain `def`); the app disposes its engine
+  on shutdown; data tables scroll horizontally on narrow screens.
+- `audidash-core`, `audidash-sdk` and the workspace are versioned `0.2.0a1` like the server.
+
+### Fixed
+- The PostgreSQL test fixture refuses to drop the schema of a database not named `*_test`.
+- Trend reconstruction orders finding events by `(at, id)`.
+
 ## [0.2.0-alpha.1] - 2026-11-26
 
 Second alpha: the server and web dashboard (Plan 2), plus the CLI client features that talk to it.

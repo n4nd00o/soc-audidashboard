@@ -13,7 +13,7 @@ vulneráveis.
 
 | Porta (host) | Serviço | Descrição |
 |---|---|---|
-| 8443 | Caddy | Dashboard web + `/enroll`. Certificado da CA interna do Caddy (`tls internal`). `/api` e `/api/*` respondem 404. |
+| 8443 | Caddy | Dashboard web + `/ca.pem` + `/enroll`. Certificado emitido pela CA interna do AudiDashboard para `AUDIDASH_DASHBOARD_HOSTS`. `/api` e `/api/*` respondem 404. |
 | 9443 | Caddy | API dos dispositivos (`/api/*` apenas), **mTLS obrigatório**. Certificado de servidor emitido pela CA interna do AudiDashboard (a CLI fixa `ca.crt`). |
 | 127.0.0.1:18080 | web-noheaders | nginx sem cabeçalhos de segurança e com banner `Server: nginx/1.x`. |
 | 127.0.0.1:18443 | tls-expired | nginx com certificado autoassinado **expirado** (2020-01-02). |
@@ -48,8 +48,13 @@ audidash demo
 ```
 
 - Use `--token=<TOKEN>` (com `=`): tokens podem começar com `-`.
-- O dashboard abre em <https://localhost:8443> (o navegador alertará sobre a CA interna do
-  Caddy, que é recriada quando o contêiner reinicia).
+- O dashboard abre em <https://localhost:8443>. O navegador alertará sobre a CA interna do
+  AudiDashboard; para evitar o alerta, importe `ca.crt` (`docker compose cp
+  server:/data/proxy/ca.crt .`) no repositório de confiança do navegador.
+- `audidash enroll --ca-fingerprint` baixa `/ca.pem`, confere a impressão digital **antes** de
+  enviar o token e só então o envia por TLS verificado com essa CA. O certificado da porta 8443
+  é emitido para `AUDIDASH_DASHBOARD_HOSTS` (padrão `localhost,127.0.0.1`), que deve conter o
+  host usado em `--server`; ele é conferido e reemitido a cada inicialização, como o da 9443.
 - Os segredos do `.env` **precisam ser URL-safe** (somente `A-Z a-z 0-9 - _`, como a saída de
   `token_urlsafe`): o segredo do proxy é inserido sem escape no Caddyfile e a senha do
   PostgreSQL na URL do banco.
@@ -69,7 +74,7 @@ Docker Compose demo stack: **PostgreSQL** (`db`), the **AudiDashboard server** (
 
 | Host port | Service | Description |
 |---|---|---|
-| 8443 | Caddy | Web dashboard + `/enroll`. Caddy's own internal CA (`tls internal`). `/api` and `/api/*` return 404. |
+| 8443 | Caddy | Web dashboard + `/ca.pem` + `/enroll`. Certificate issued by the AudiDashboard internal CA for `AUDIDASH_DASHBOARD_HOSTS`. `/api` and `/api/*` return 404. |
 | 9443 | Caddy | Device API (`/api/*` only), **mutual TLS required**. Server certificate issued by the AudiDashboard internal CA (the CLI pins `ca.crt`). |
 | 127.0.0.1:18080 | web-noheaders | nginx without security headers, `Server: nginx/1.x` banner. |
 | 127.0.0.1:18443 | tls-expired | nginx with an **expired** self-signed certificate (2020-01-02). |
@@ -108,8 +113,14 @@ audidash demo
 ```
 
 - Pass `--token=<TOKEN>` (with `=`): tokens may start with `-`.
-- The dashboard is at <https://localhost:8443> (browsers warn about Caddy's internal CA, which
-  is regenerated whenever the container restarts).
+- The dashboard is at <https://localhost:8443>. Browsers warn about the AudiDashboard internal
+  CA; to avoid it, import `ca.crt` (`docker compose cp server:/data/proxy/ca.crt .`) into the
+  browser's trust store.
+- `audidash enroll --ca-fingerprint` downloads `/ca.pem`, checks the fingerprint **before**
+  sending the token and then sends it only over TLS verified against that CA. The 8443
+  certificate is issued for `AUDIDASH_DASHBOARD_HOSTS` (default `localhost,127.0.0.1`), which
+  must include the host you pass to `--server`; it is checked and reissued on every start, like
+  the 9443 one.
 - Secrets in `.env` **must be URL-safe** (only `A-Z a-z 0-9 - _`, as `token_urlsafe`
   produces): the proxy secret is substituted raw into the Caddyfile and the PostgreSQL
   password into the database URL.

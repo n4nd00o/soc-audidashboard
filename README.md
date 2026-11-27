@@ -94,7 +94,7 @@ uv run audidash login
 uv run audidash demo
 ```
 
-Abra <https://localhost:8443> (o navegador avisará sobre a CA interna do Caddy), entre com o
+Abra <https://localhost:8443> (o navegador avisará sobre a CA interna do AudiDashboard), entre com o
 administrador e o código TOTP e veja ativos, achados e execuções. Para apagar tudo:
 `docker compose -f deploy/docker-compose.yml down -v`.
 

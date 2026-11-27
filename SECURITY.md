@@ -32,7 +32,7 @@ This tool must only be used against systems you own or are explicitly authorized
 
 | Boundary | Protection | Trust placed in it |
 |---|---|---|
-| Browser <-> Caddy `:8443` | TLS (Caddy internal CA); `/api*` answers 404 here | Dashboard users, authenticated by password + TOTP session |
+| Browser <-> Caddy `:8443` | TLS, server certificate issued by the AudiDashboard internal CA (`AUDIDASH_DASHBOARD_HOSTS`); `/api*` answers 404 here | Dashboard users, authenticated by password + TOTP session |
 | CLI <-> Caddy `:9443` | TLS 1.3 + **mutual TLS**: client certificate issued by the AudiDashboard internal CA; server certificate from the same CA, pinned by the CLI | Enrolled devices only |
 | Caddy <-> app | Internal Docker network (`internal: true`, no egress) + secret header `X-Audidash-Proxy-Secret`; Caddy strips client-supplied copies of the proxy headers and sets the peer IP and (on `:9443`) the verified client-certificate fingerprint | The app trusts these headers **only** when the secret matches (constant-time compare) |
 | App <-> PostgreSQL | Same internal network; credentials from the environment | The database holds findings, users (Argon2id hashes, encrypted TOTP secrets) and the audit log |
@@ -76,13 +76,27 @@ control (RBAC) on every route; strict CSP/security headers (no inline scripts, n
 JavaScript: charts are server-rendered SVG, htmx is vendored); every security-relevant action goes
 to a hash-chained audit log (`audidash-server audit verify`).
 
-### Device enrolment is trust-on-first-use / Inscrição é TOFU
+### Device enrolment and first contact / Inscrição e primeiro contato
 
-An enrolment token is single-use and expires in 24 h, so a stolen token is useful only until it
-is used. **Limits:** an active man-in-the-middle on the very first connection can capture and
-*burn* the token (denial of enrolment) and present its own CA. The `--ca-fingerprint` check, which
-the operator copies out-of-band from `audidash-server show-ca-fingerprint`, catches CA
-substitution; do not skip it. After enrolment, the CLI pins the CA certificate.
+An enrolment token is single-use and expires in 24 h. The dashboard listener (`:8443`) presents a
+certificate issued by the AudiDashboard internal CA, and the server publishes that CA at
+`GET /ca.pem` (public, `Cache-Control: no-store`).
+
+- **With `--ca-fingerprint`** (copied out-of-band from `audidash-server show-ca-fingerprint`):
+  the CLI downloads `/ca.pem` without TLS verification (it is public and nothing secret is
+  sent), compares its SHA-256 with the fingerprint and aborts on mismatch **before** asking for
+  or sending the token. The token is then sent only over TLS verified against that CA, host
+  name included, so it never leaves over an unverified channel. An active man-in-the-middle can
+  at most block enrolment. After enrolment the CLI pins the CA certificate.
+- **With `--insecure-first-contact`** the CLI shows the downloaded CA fingerprint and requires an
+  explicit `y` (EOF/Ctrl-C abort) before sending the token over **unverified** TLS. If nobody
+  compares that fingerprint, a man-in-the-middle on the first contact can capture the token and
+  enrol **its own** device in your place. Use it only on a network path you control.
+
+PT: com `--ca-fingerprint`, a CLI baixa `/ca.pem`, confere o SHA-256 antes de enviar o token e o
+envia apenas por TLS verificado com essa CA. Com `--insecure-first-contact`, a CLI mostra a
+impressão digital e pede confirmação; sem conferência, um atacante no primeiro contato pode
+capturar o token e inscrever o próprio dispositivo.
 
 ### Known server limitations / Limitações conhecidas do servidor
 
@@ -92,8 +106,12 @@ substitution; do not skip it. After enrolment, the CLI pins the CA certificate.
 - **SQLite is development-only.** Concurrency (and the SQL-side lockout/audit-chain guarantees
   under load) is only exercised on PostgreSQL; production configuration requires a database URL
   and the compose stack uses PostgreSQL. / SQLite é só para desenvolvimento.
-- **Caddy loads the API certificate only at start.** A reissued server certificate (or a changed
-  `AUDIDASH_API_HOSTS`) takes effect after `docker compose up -d --force-recreate server proxy`.
+- **Caddy loads the listener certificates only at start.** A reissued server certificate (or a
+  changed `AUDIDASH_API_HOSTS` / `AUDIDASH_DASHBOARD_HOSTS`) takes effect after
+  `docker compose up -d --force-recreate server proxy`.
+- **Run times are client-reported.** Ingestion rejects `started_at`/`finished_at` before
+  2000-01-01 or more than 24 h ahead of the server clock; retention ages runs by the server's
+  `received_at`, never by the client clock.
 - **`verified.json` cache trust is client-side.** The CLI caches the server's list of verified
   plugin hashes (`plugins list --sync-verified`) locally; whoever can write that file on the
   analyst's machine can alter what the client treats as `verified`. The catalog signature remains
