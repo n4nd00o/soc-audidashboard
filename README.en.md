@@ -94,7 +94,7 @@ uv run audidash login
 uv run audidash demo
 ```
 
-Open <https://localhost:8443> (browsers warn about Caddy's internal CA), sign in with the admin
+Open <https://localhost:8443> (browsers warn about the AudiDashboard internal CA), sign in with the admin
 account and TOTP code, and browse assets, findings and runs. To wipe everything:
 `docker compose -f deploy/docker-compose.yml down -v`.
 
