@@ -735,3 +735,16 @@ def test_cookie_name_is_validated(name: str) -> None:
         set_cookie(Response(), name, "v")
     with pytest.raises(ValueError):
         clear_cookie(Response(), name)
+
+
+def test_login_page_never_echoes_client_csrf_cookie(app_client: TestClient) -> None:
+    from audidash_server.auth.csrf import LOGIN_CSRF_COOKIE
+
+    first = app_client.get("/login")
+    assert LOGIN_CSRF_COOKIE in first.headers.get("set-cookie", "")
+    # The browser now holds a valid signed cookie: the server reuses it for the form
+    # but must not emit a Set-Cookie carrying the client-supplied value back.
+    second = app_client.get("/login")
+    assert LOGIN_CSRF_COOKIE not in second.headers.get("set-cookie", "")
+    token = app_client.cookies.get(LOGIN_CSRF_COOKIE)
+    assert token is not None and token in second.text

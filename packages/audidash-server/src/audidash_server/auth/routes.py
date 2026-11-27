@@ -19,7 +19,7 @@ from audidash_server.auth import service
 from audidash_server.auth.csrf import (
     check_login_csrf,
     csrf_protect,
-    login_csrf_token,
+    issue_login_csrf,
     set_login_csrf_cookie,
     tokens_equal,
 )
@@ -83,14 +83,15 @@ def _see_other(url: str) -> RedirectResponse:
 def _login_page(
     request: Request, *, error: str | None = None, username: str = "", status_code: int = 200
 ) -> Response:
-    token = login_csrf_token(request)
+    token, fresh_cookie = issue_login_csrf(request)
     response = render(
         request,
         "login.html",
         {"login_csrf": token, "error": error, "username": username},
         status_code,
     )
-    set_login_csrf_cookie(response, token)
+    if fresh_cookie is not None:
+        set_login_csrf_cookie(response, fresh_cookie)
     return response
 
 

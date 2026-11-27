@@ -160,12 +160,17 @@ jobs:
       - name: API listener rejects clients without a certificate (TLS handshake)
         run: |
           set +e
-          curl -sS --cacert "$RUNNER_TEMP/ca.crt" -o /dev/null https://localhost:9443/api/v1/assets
+          err=$(curl -sS --cacert "$RUNNER_TEMP/ca.crt" -o /dev/null https://localhost:9443/api/v1/assets 2>&1)
           rc=$?
           set -e
-          echo "curl exit code: $rc"
-          # 35 = TLS handshake error, 56 = alert received (TLS 1.3 certificate_required)
-          test "$rc" = "35" || test "$rc" = "56"
+          echo "curl exit code: $rc: $err"
+          # 35 = TLS handshake error; 55/56 = send/recv failed because the server sent the
+          # TLS 1.3 certificate_required alert (which code depends on timing).
+          case "$rc" in
+            35) ;;
+            55|56) grep -qi "certificate required" <<<"$err" ;;
+            *) exit 1 ;;
+          esac
 
       - name: API listener certificate chains to the internal CA with a localhost SAN
         run: |
