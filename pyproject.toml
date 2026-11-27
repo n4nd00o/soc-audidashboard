@@ -1,6 +1,6 @@
 [project]
 name = "soc-audidashboard"
-version = "0.1.0"
+version = "0.2.0a1"
 description = "Security-audit plugin platform with a findings dashboard (student project)."
 readme = "README.en.md"
 license = "Apache-2.0"
